@@ -1,0 +1,15 @@
+[package]
+name = "scytty-common"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde = { version = "1", features = ["derive"] }
+bincode = "1.3"
+flate2 = "1"
+ghostty-vt.workspace = true
+png = "0.18"
+
+[dev-dependencies]
+base64 = "0.22"

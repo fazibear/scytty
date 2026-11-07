@@ -1,0 +1,228 @@
+use anyhow::{Context, Result, bail};
+use bincode::Options;
+use flate2::{Compression, read::GzDecoder, write::GzEncoder};
+use serde::{Deserialize, Serialize};
+use std::io::{Read, Write};
+
+// Bump whenever messages or the Ghostty snapshot format become incompatible.
+pub const PROTOCOL_VERSION: u32 = 2;
+const MAGIC: &[u8; 8] = b"SCYTTY\r\n";
+
+/// Fixed preamble: both peers write before reading, independent of frame encoding.
+pub fn handshake(stream: &mut (impl Read + Write)) -> Result<()> {
+    stream
+        .write_all(MAGIC)
+        .context("sending scytty handshake")?;
+    stream.write_all(&PROTOCOL_VERSION.to_be_bytes())?;
+    stream.flush()?;
+    let mut peer = [0; 12];
+    stream.read_exact(&mut peer).context(
+        "scytty handshake failed: peer closed or timed out before identifying its protocol; it may be an older server. Update both binaries and restart the daemon when safe (restart ends sessions)",
+    )?;
+    if &peer[..8] != MAGIC {
+        bail!(
+            "Not a compatible scytty peer (missing protocol handshake). Update both binaries and restart the daemon when safe (restart ends sessions)"
+        );
+    }
+    let version = u32::from_be_bytes(peer[8..].try_into().unwrap());
+    if version != PROTOCOL_VERSION {
+        bail!(
+            "scytty protocol mismatch: local {PROTOCOL_VERSION}, peer {version}. Update both binaries and restart the daemon when safe (restart ends sessions)"
+        );
+    }
+    Ok(())
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub enum Request {
+    Attach {
+        session: String,
+    },
+    NewTab,
+    CloseTab {
+        id: u64,
+    },
+    Activate {
+        id: u64,
+    },
+    Input {
+        id: u64,
+        bytes: Vec<u8>,
+    },
+    Resize {
+        id: u64,
+        cols: u16,
+        rows: u16,
+        width: u32,
+        height: u32,
+    },
+    CloseSession,
+    SetScrollback {
+        megabytes: u16,
+    },
+}
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct Progress {
+    pub state: String,
+    pub percent: Option<u8>,
+}
+#[derive(Serialize, Deserialize, Debug, Default)]
+pub struct TabInfo {
+    pub id: u64,
+    pub title: String,
+    pub exited: bool,
+    pub progress: Option<Progress>,
+    pub user_vars: std::collections::BTreeMap<String, String>,
+}
+#[derive(Serialize, Deserialize, Debug)]
+pub enum Update {
+    State {
+        tabs: Vec<TabInfo>,
+        active: u64,
+    },
+    Snapshot {
+        id: u64,
+        bytes: Vec<u8>,
+    },
+    Output {
+        id: u64,
+        bytes: Vec<u8>,
+    },
+    Resized {
+        id: u64,
+        cols: u16,
+        rows: u16,
+        width: u32,
+        height: u32,
+    },
+    Error(String),
+}
+// Bound allocations at the socket trust boundary, including snapshot frames.
+// Allow 64 MiB scrollback plus both screens' bounded image storage in snapshots.
+const MAX_FRAME: usize = 128 * 1024 * 1024;
+pub fn send<T: Serialize>(writer: &mut impl Write, value: &T) -> Result<()> {
+    let data = bincode::DefaultOptions::new()
+        .with_limit(MAX_FRAME as u64)
+        .serialize(value)?;
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
+    encoder.write_all(&data)?;
+    let compressed = encoder.finish()?;
+    if compressed.len() > MAX_FRAME {
+        bail!("compressed protocol frame too large");
+    }
+    writer.write_all(&(compressed.len() as u32).to_be_bytes())?;
+    writer.write_all(&compressed)?;
+    Ok(())
+}
+pub fn receive<T: for<'a> Deserialize<'a>>(reader: &mut impl Read) -> Result<T> {
+    let mut length = [0; 4];
+    reader
+        .read_exact(&mut length)
+        .context("reading protocol frame header")?;
+    let length = u32::from_be_bytes(length) as usize;
+    if length > MAX_FRAME {
+        bail!("protocol frame too large");
+    }
+    let mut data = vec![0; length];
+    reader
+        .read_exact(&mut data)
+        .with_context(|| format!("reading {length}-byte compressed protocol frame"))?;
+    let mut decoder = GzDecoder::new(&data[..]);
+    let mut decoded = Vec::new();
+    decoder
+        .by_ref()
+        .take(MAX_FRAME as u64 + 1)
+        .read_to_end(&mut decoded)
+        .context("decompressing protocol frame")?;
+    if decoded.len() > MAX_FRAME {
+        bail!("decompressed protocol frame too large");
+    }
+    if !decoder.into_inner().is_empty() {
+        bail!("trailing compressed data");
+    }
+    bincode::DefaultOptions::new()
+        .with_limit(MAX_FRAME as u64)
+        .deserialize(&decoded)
+        .with_context(|| format!("decoding {}-byte protocol message", decoded.len()))
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn handshake_then_frames() -> Result<()> {
+        let (mut client, mut server) = std::os::unix::net::UnixStream::pair()?;
+        let peer = std::thread::spawn(move || -> Result<()> {
+            handshake(&mut server)?;
+            assert!(matches!(receive::<Request>(&mut server)?, Request::NewTab));
+            Ok(())
+        });
+        handshake(&mut client)?;
+        send(&mut client, &Request::NewTab)?;
+        peer.join().unwrap()?;
+        Ok(())
+    }
+
+    #[test]
+    fn handshake_rejects_mismatch_and_legacy() -> Result<()> {
+        for kind in ["version", "magic", "legacy"] {
+            let (mut client, mut server) = std::os::unix::net::UnixStream::pair()?;
+            let peer = std::thread::spawn(move || {
+                let mut hello = [0; 12];
+                server.read_exact(&mut hello).unwrap();
+                match kind {
+                    "version" => hello[8..].copy_from_slice(&(PROTOCOL_VERSION + 1).to_be_bytes()),
+                    "magic" => hello[0] = b'X',
+                    _ => return,
+                }
+                server.write_all(&hello).unwrap();
+            });
+            let error = format!("{:#}", handshake(&mut client).unwrap_err());
+            assert!(
+                error.contains(match kind {
+                    "version" => "protocol mismatch",
+                    "magic" => "missing protocol handshake",
+                    _ => "older server",
+                }),
+                "{error}"
+            );
+            peer.join().unwrap();
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn framing() -> Result<()> {
+        let mut bytes = Vec::new();
+        send(
+            &mut bytes,
+            &Request::Input {
+                id: 3,
+                bytes: vec![0, 255],
+            },
+        )?;
+        assert!(
+            matches!(receive(&mut &bytes[..])?, Request::Input { id: 3, bytes } if bytes == [0, 255])
+        );
+        assert!(receive::<Request>(&mut &u32::MAX.to_be_bytes()[..]).is_err());
+        assert_eq!(&bytes[4..6], &[0x1f, 0x8b]);
+        let checksum = bytes.len() - 8;
+        bytes[checksum] ^= 0xff;
+        assert!(receive::<Request>(&mut &bytes[..]).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn consecutive_frames() -> Result<()> {
+        let mut bytes = Vec::new();
+        send(&mut bytes, &Request::NewTab)?;
+        send(&mut bytes, &Request::Activate { id: 42 })?;
+        let mut reader = &bytes[..];
+        assert!(matches!(receive::<Request>(&mut reader)?, Request::NewTab));
+        assert!(matches!(
+            receive::<Request>(&mut reader)?,
+            Request::Activate { id: 42 }
+        ));
+        assert!(reader.is_empty());
+        Ok(())
+    }
+}

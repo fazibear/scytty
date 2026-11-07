@@ -1,0 +1,11 @@
+[package]
+name = "scytty-server"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+ghostty-vt.workspace = true
+scytty-common.workspace = true
+portable-pty = "0.9"
+base64 = "0.22"
