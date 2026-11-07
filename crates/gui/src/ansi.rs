@@ -1,8 +1,8 @@
-use eframe::egui::Color32;
+use gpui::{Rgba, rgb};
 
-type Segment = (String, Option<Color32>);
+type Segment = (String, Option<Rgba>);
 
-pub fn segments(text: &str, default: Option<Color32>) -> Vec<Segment> {
+pub fn segments(text: &str, default: Option<Rgba>) -> Vec<Segment> {
     if text.is_empty() {
         return vec![(String::new(), default)];
     }
@@ -65,7 +65,7 @@ pub fn segments(text: &str, default: Option<Color32>) -> Vec<Segment> {
     result
 }
 
-fn sgr(values: &[u16], color: &mut Option<Color32>, default: Option<Color32>) {
+fn sgr(values: &[u16], color: &mut Option<Rgba>, default: Option<Rgba>) {
     let mut i = 0;
     while i < values.len() {
         match values[i] {
@@ -87,11 +87,9 @@ fn sgr(values: &[u16], color: &mut Option<Color32>, default: Option<Color32>) {
                             .is_some_and(|rgb| rgb.iter().all(|n| *n <= 255)) =>
                     {
                         if foreground {
-                            *color = Some(Color32::from_rgb(
-                                values[i + 2] as u8,
-                                values[i + 3] as u8,
-                                values[i + 4] as u8,
-                            ));
+                            *color = Some(rgb((u32::from(values[i + 2]) << 16)
+                                | (u32::from(values[i + 3]) << 8)
+                                | u32::from(values[i + 4])));
                         }
                         i += 4;
                     }
@@ -104,7 +102,7 @@ fn sgr(values: &[u16], color: &mut Option<Color32>, default: Option<Color32>) {
     }
 }
 
-fn indexed(n: u16) -> Color32 {
+fn indexed(n: u16) -> Rgba {
     const ANSI: [[u8; 3]; 16] = [
         [0, 0, 0],
         [205, 0, 0],
@@ -132,7 +130,7 @@ fn indexed(n: u16) -> Color32 {
         }
         _ => [8 + 10 * (n - 232) as u8; 3],
     };
-    Color32::from_rgb(r, g, b)
+    rgb((u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b))
 }
 
 #[cfg(test)]
@@ -146,18 +144,21 @@ mod tests {
             result,
             vec![
                 (" main ".into(), Some(indexed(2))),
-                ("✓".into(), Some(Color32::from_rgb(1, 2, 3))),
+                ("✓".into(), Some(rgb(0x010203))),
                 (" done".into(), None)
             ]
         );
-        assert_eq!(segments("\x1b[38;5;196mred", None)[0].1, Some(Color32::RED));
+        assert_eq!(
+            segments("\x1b[38;5;196mred", None)[0].1,
+            Some(rgb(0xff0000))
+        );
         assert_eq!(
             segments("\x1b]0;hidden\x07ok\x1b[38;2m!", None),
             vec![("ok".into(), None), ("!".into(), None)]
         );
         assert_eq!(
-            segments("\x1b[0mghost", Some(Color32::TRANSPARENT))[0].1,
-            Some(Color32::TRANSPARENT)
+            segments("\x1b[0mghost", Some(gpui::rgba(0)))[0].1,
+            Some(gpui::rgba(0))
         );
     }
 }

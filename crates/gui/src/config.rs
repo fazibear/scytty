@@ -25,7 +25,7 @@ impl Default for Config {
             font_size: 16.0,
             scrollback_mb: 16,
             font_family: "monospace".into(),
-            icon_scale: 1.4,
+            icon_scale: 1.5,
             background_opacity: 0.8,
             window_width: 960.0,
             window_height: 640.0,
@@ -74,7 +74,7 @@ impl Config {
         active: bool,
         remote: bool,
         tab: Option<&scytty_common::protocol::TabInfo>,
-    ) -> Result<Vec<(String, Option<eframe::egui::Color32>)>> {
+    ) -> Result<Vec<(String, Option<gpui::Rgba>)>> {
         let ctx = self.lua.create_table()?;
         ctx.set("title", title)?;
         ctx.set("index", index + 1)?;
@@ -102,7 +102,7 @@ impl Config {
         let segment = |text: String, color: Option<String>| -> Result<_> {
             let color = color
                 .map(|c| {
-                    eframe::egui::Color32::from_hex(&c)
+                    gpui::Rgba::try_from(c.as_str())
                         .map_err(|_| anyhow::anyhow!("invalid status color: {c}; use #RRGGBB"))
                 })
                 .transpose()?;
@@ -234,7 +234,7 @@ mod tests {
             )?;
             let config = Config::parse_at("return {format_tab=require('tabs')}", Some(&dir))?;
             let tabs = config.status_text("format_tab", "test", 0, true, false, None)?;
-            assert_eq!(tabs[0], ("test".into(), Some(eframe::egui::Color32::RED)));
+            assert_eq!(tabs[0], ("test".into(), Some(gpui::rgb(0xff0000))));
             Ok(())
         })();
         std::fs::remove_dir_all(dir)?;
@@ -307,10 +307,7 @@ mod tests {
                 ..Default::default()
             };
             let right = config.status_text("right_status", "", 0, false, false, Some(&tab))?;
-            assert_eq!(
-                right[0].1.unwrap(),
-                eframe::egui::Color32::from_rgba_unmultiplied(255, 255, 0, alpha)
-            );
+            assert_eq!(right[0].1.unwrap(), gpui::rgba(0xffff0000 | alpha as u32));
         }
         Ok(())
     }
@@ -324,14 +321,11 @@ mod tests {
             "ssh"
         );
         let text = config.status_text("format_tab", "nvim test", 1, true, false, None)?;
-        assert_eq!(
-            text[0],
-            ("2:nvim test".into(), Some(eframe::egui::Color32::RED))
-        );
+        assert_eq!(text[0], ("2:nvim test".into(), Some(gpui::rgb(0xff0000))));
         let defaults = Config::default();
         let tab = defaults.status_text("format_tab", "nvim /tmp/test.rs", 0, true, false, None)?;
         assert_eq!(tab[0].0, " nvim /tmp/test.rs ");
-        assert_eq!(tab[0].1, Some(eframe::egui::Color32::WHITE));
+        assert_eq!(tab[0].1, Some(gpui::rgb(0xffffff)));
         let vars = std::collections::BTreeMap::from([
             ("right_status".into(), "building ".into()),
             ("right_status_timestamp".into(), "9999999999".into()),
@@ -367,7 +361,7 @@ mod tests {
             Config::parse("return {font_family='Menlo'}")?.font_family,
             "Menlo"
         );
-        assert_eq!(config.icon_scale, 1.4);
+        assert_eq!(config.icon_scale, 1.5);
         assert_eq!(Config::parse("return {icon_scale=2}")?.icon_scale, 2.0);
         assert_eq!(config.window_width, 960.0);
         for source in [

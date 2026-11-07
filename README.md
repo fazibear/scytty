@@ -4,14 +4,14 @@
 
 # scytty
 
-A minimal native terminal in Rust: egui/eframe draws the window,
+A minimal native terminal in Rust: GPUI draws the window,
 libghostty-vt (via `ghostty-vt`) interprets terminal output, and
 `portable-pty` runs your login shell. This uses Ghostty's VT library,
 not the full Ghostty application embedding API.
 
 ## Workspace
 
-- `crates/gui/` — `scytty`: egui client, terminal rendering, SSH transport and system font discovery
+- `crates/gui/` — `scytty`: GPUI client, terminal rendering, SSH transport and system font discovery
 - `crates/server/` — `scytty-server`: sessions, tabs, PTYs and server-side Ghostty state
 - `crates/common/` — `scytty-common`: compressed binary protocol and local connection bootstrap
 
@@ -21,7 +21,9 @@ The GUI does not depend on the server crate; both share only `scytty-common`.
 
 Requires Rust 1.96+, Zig 0.17.x on PATH (or set `ZIG`), a C/C++ build
 toolchain, and internet access for the first build. The Ghostty binding
-build downloads and compiles its pinned upstream source.
+build downloads and compiles its pinned upstream source. macOS also requires
+Xcode command-line tools and a Metal-capable GPU. GPUI compiles Metal shaders at
+runtime, so the optional Metal compiler toolchain is not required.
 
 ```sh
 cargo build --release --workspace  # build GUI and server
@@ -34,7 +36,9 @@ or PATH, using the same stdio bridge as SSH. The bridge connects to the private
 Unix socket and starts the persistent daemon if needed.
 Window size and position are saved on normal exit and restored on launch.
 The last saved geometry is shared across sessions; configured dimensions are
-used when no saved geometry exists.
+used when no saved geometry exists. GPUI stores geometry in
+`$XDG_STATE_HOME/scytty/window` (default `~/.local/state/scytty/window`);
+the former egui geometry is not imported.
 
 One window can attach to each session.
 Every shell started by the server receives `SCYTTY_SESSION` set to its session name
@@ -68,7 +72,7 @@ remote daemon. Restart it separately when safe; restarting ends its sessions.
 The `Build` workflow runs only when a tag is pushed. After all builds and tests
 succeed, it creates a GitHub Release for that tag with downloadable archives:
 
-- macOS ARM64 and x86_64: desktop `.app` bundle plus standalone server archives.
+- macOS ARM64: desktop `.app` bundle plus standalone server archives.
 - Linux x86_64: standalone server archive (built on Ubuntu 22.04).
 - Windows x86_64: GUI executable archive (SSH sessions only; no local server).
 
@@ -129,7 +133,7 @@ with `remote` and `user_vars` (the active tab's OSC 1337 variables);
  tab's `user_vars`.
 Return a string or an array of `{text = "...", color = "#RRGGBBAA"}`
 segments. Color is optional. Nerd Font icons followed by a space enlarge into
-that space automatically. Set `icon_scale = 1.4` (range 1–3) to configure their
+that space automatically. Set `icon_scale = 1.5` (default; range 1–3) to configure their
 enlargement in both the terminal and status bar. Icons remain clipped to the row.
 Custom command icons, themes and status animations belong in your Lua config;
 Rust has no ghost-specific rendering logic.
@@ -172,10 +176,13 @@ the daemon when safe (restarting ends existing sessions).
 
 ## Default shortcuts
 
+- **Ctrl+Plus / Ctrl+Minus** (also Cmd on macOS): increase/decrease font size
+- **Ctrl+0** (also Cmd+0 on macOS): reset to the configured font size
 - **Drag**: select terminal text
-- **Cmd+C / Cmd+V**: copy selection / paste clipboard (including over SSH)
-- **Cmd+T**: new tab
-- **Cmd+Left / Cmd+Right**: previous/next tab, wrapping at the ends
+- **Cmd+C / Cmd+V** on macOS, **Ctrl+Shift+C / Ctrl+Shift+V** elsewhere:
+  copy selection / paste clipboard (including over SSH)
+- **Cmd+T** (Ctrl+T elsewhere): new tab
+- **Cmd+Left / Cmd+Right** (Ctrl+Left / Ctrl+Right elsewhere): previous/next tab, wrapping at the ends
 
 Tab text and the `+` character also work with the mouse.
 

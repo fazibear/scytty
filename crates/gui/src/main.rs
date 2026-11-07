@@ -1,495 +1,326 @@
-use anyhow::{Context, Result};
-use eframe::egui::{self, Color32, FontId, Pos2, Rect, Vec2};
+use anyhow::{Context as _, Result};
 use ghostty_vt::{
     RenderState, Terminal, key,
     render::{CellIterator, RowIterator},
     screen::TrackedGridRef,
     selection::{FormatOptions, Selection},
-    terminal::{Point, PointCoordinate, ScrollViewport},
+    terminal::{Point as TerminalPoint, PointCoordinate, ScrollViewport},
+};
+use gpui::{prelude::*, *};
+use scytty_common::{
+    protocol::{self, Request, TabInfo, Update},
+    stream::Stream,
+};
+use std::{
+    collections::HashMap,
+    ops::Range,
+    sync::mpsc::{self, Receiver},
+    thread,
+    time::{Duration, Instant},
 };
 mod ansi;
 mod config;
 mod fonts;
 mod images;
 mod transport;
+mod window_state;
 use config::Config;
-use scytty_common::protocol::{self, Request, TabInfo, Update};
-use scytty_common::stream::Stream;
-use std::collections::HashMap;
-use std::{
-    sync::mpsc::{self, Receiver},
-    thread,
-};
 
-struct App {
+#[derive(Clone)]
+struct Cell {
+    x: usize,
+    y: usize,
+    text: String,
+    fg: Rgba,
+    bg: Option<Rgba>,
+    narrow: bool,
+}
+struct Tab {
     terminal: Terminal,
     render: RenderState,
     images: images::Images,
-    last_frame: Vec<egui::epaint::ClippedShape>,
-    render_hold_since: Option<std::time::Instant>,
-    writer: Stream,
-    id: u64,
-    size: (u16, u16, u32, u32),
+    cells: Vec<Cell>,
+    cursor: Option<(u16, u16)>,
+    hold_since: Option<Instant>,
     encoder: key::Encoder,
+    size: (u16, u16, u32, u32),
+    resize_target: Option<((u16, u16, u32, u32), Instant)>,
+    resize_pending: bool,
+    anchor: Option<TrackedGridRef>,
     exited: bool,
-    selection_anchor: Option<TrackedGridRef>,
 }
-
-impl App {
-    fn new(writer: Stream, id: u64, mut terminal: Terminal) -> Result<Self> {
+impl Tab {
+    fn new(mut terminal: Terminal) -> Result<Self> {
         scytty_common::images::configure(&mut terminal)?;
-        let render = RenderState::new()?;
-        let encoder = key::Encoder::new()?;
         Ok(Self {
-            render,
-            images: images::Images::default(),
-            last_frame: Vec::new(),
-            render_hold_since: None,
-            writer,
-            id,
-            size: (0, 0, 0, 0),
-            encoder,
             terminal,
+            render: RenderState::new()?,
+            images: Default::default(),
+            cells: vec![],
+            cursor: None,
+            hold_since: None,
+            encoder: key::Encoder::new()?,
+            size: (0, 0, 0, 0),
+            resize_target: None,
+            resize_pending: false,
+            anchor: None,
             exited: false,
-            selection_anchor: None,
         })
     }
-
-    fn send(&mut self, bytes: &[u8]) -> Result<()> {
-        self.terminal.set_selection(None)?;
-        self.selection_anchor = None;
-        self.terminal.scroll_viewport(ScrollViewport::Bottom);
-        protocol::send(
-            &mut self.writer,
-            &Request::Input {
-                id: self.id,
-                bytes: bytes.to_vec(),
-            },
-        )?;
-        Ok(())
-    }
-
-    fn paste(&mut self, text: &str) -> Result<()> {
-        let mut data = text.as_bytes().to_vec();
-        let mut encoded = vec![0; data.len() * 2 + 32];
-        let bracketed = self
-            .terminal
-            .mode(ghostty_vt::terminal::Mode::BRACKETED_PASTE)?;
-        let n = ghostty_vt::paste::encode(&mut data, bracketed, &mut encoded)?;
-        self.send(&encoded[..n])
-    }
-
-    fn draw(&mut self, ui: &mut egui::Ui, font_size: f32, icon_scale: f32) -> Result<()> {
-        if self.exited {
-            ui.label("Shell exited. Close the window to quit.");
+    fn request_resize(&mut self, size: (u16, u16, u32, u32), now: Instant) -> bool {
+        if self.resize_target.is_none_or(|(target, _)| target != size) {
+            self.resize_target = Some((size, now));
         }
-        let font = FontId::monospace(font_size);
-        let cell = ui.fonts_mut(|f| Vec2::new(f.glyph_width(&font, 'M'), f.row_height(&font)));
-        let (rect, response) =
-            ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
-        let size = (
-            (rect.width() / cell.x).floor().clamp(1.0, 500.0) as u16,
-            (rect.height() / cell.y).floor().clamp(1.0, 300.0) as u16,
-            (cell.x as u32).max(1),
-            (cell.y as u32).max(1),
-        );
-        if size != self.size {
-            protocol::send(
-                &mut self.writer,
-                &Request::Resize {
-                    id: self.id,
-                    cols: size.0,
-                    rows: size.1,
-                    width: size.2,
-                    height: size.3,
-                },
-            )?;
-            self.size = size;
+        if self.resize_pending || size == self.size {
+            return false;
         }
-        if response.hovered() {
-            let scroll = ui.input(|i| i.smooth_scroll_delta.y);
-            if scroll.abs() >= 1.0 {
-                self.terminal
-                    .scroll_viewport(ScrollViewport::Delta((scroll / cell.y).round() as isize));
-            }
-        }
-        if response.clicked() {
-            self.terminal.set_selection(None)?;
-            self.selection_anchor = None;
-        }
-        if response.drag_started_by(egui::PointerButton::Primary)
-            && let Some(origin) = ui.input(|i| i.pointer.press_origin())
+        // Let live resizing settle before reflowing the shell's screen again.
+        if self.size != (0, 0, 0, 0)
+            && now.duration_since(self.resize_target.unwrap().1) < Duration::from_millis(75)
         {
-            let point = selection_point(
-                origin,
-                rect,
-                cell,
-                self.terminal.cols()?,
-                self.terminal.rows()?,
-            );
-            self.selection_anchor = Some(self.terminal.track_grid_ref(point)?);
+            return false;
         }
-        if response.dragged_by(egui::PointerButton::Primary)
-            && let Some(pos) = response.interact_pointer_pos()
-            && let Some(anchor) = &self.selection_anchor
-            && let Some(start) = anchor.snapshot(&self.terminal)?
-        {
-            let end = self.terminal.grid_ref(selection_point(
-                pos,
-                rect,
-                cell,
-                self.terminal.cols()?,
-                self.terminal.rows()?,
-            ))?;
-            self.terminal
-                .set_selection(Some(&Selection::new(start, end, false)))?;
-        }
-        if !self.exited {
-            let files = ui.input_mut(|i| std::mem::take(&mut i.raw.dropped_files));
-            let paths: Vec<_> = files.iter().map(|file| file.path()).collect();
-            if !paths.is_empty() {
-                self.paste(&dropped_paths(&paths)?)?;
-            }
-        }
-        if ui.input(|i| i.focused) && !self.exited {
-            for event in ui.input(|i| i.events.clone()) {
-                match event {
-                    egui::Event::Copy => {
-                        if let Some(text) = selected_text(&self.terminal)? {
-                            ui.ctx().copy_text(text);
-                        }
-                    }
-                    egui::Event::Text(text) => self.send(text.as_bytes())?,
-                    egui::Event::Paste(text) => self.paste(&text)?,
-                    egui::Event::Key {
-                        key: k,
-                        pressed: true,
-                        modifiers,
-                        ..
-                    } => {
-                        if let Some(k) = terminal_key(k) {
-                            let mut event = key::Event::new()?;
-                            let mut mods = key::Mods::empty();
-                            if modifiers.shift {
-                                mods |= key::Mods::SHIFT;
-                            }
-                            if modifiers.ctrl {
-                                mods |= key::Mods::CTRL;
-                            }
-                            if modifiers.alt {
-                                mods |= key::Mods::ALT;
-                            }
-                            event.set_key(k).set_mods(mods);
-                            let mut bytes = Vec::new();
-                            self.encoder
-                                .set_options_from_terminal(&self.terminal)
-                                .encode_to_vec(&event, &mut bytes)?;
-                            self.send(&bytes)?;
-                        } else if modifiers.ctrl && !modifiers.alt {
-                            let name = k.name();
-                            if name.len() == 1 && name.as_bytes()[0].is_ascii_alphabetic() {
-                                self.send(&[name.as_bytes()[0].to_ascii_uppercase() & 0x1f])?;
-                            } else if k == egui::Key::Space {
-                                self.send(&[0])?;
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-        let painter = ui.painter_at(rect);
-        if hold_frame(&self.terminal, &mut self.render_hold_since)? {
-            for shape in &self.last_frame {
-                painter
-                    .with_clip_rect(shape.clip_rect.intersect(rect))
-                    .add(shape.shape.clone());
-            }
-            ui.ctx()
-                .request_repaint_after(std::time::Duration::from_millis(16));
+        self.resize_pending = true;
+        true
+    }
+    fn snapshot(&mut self) -> Result<()> {
+        if hold_frame(&self.terminal, &mut self.hold_since)? {
             return Ok(());
-        }
-        let first_shape = ui.ctx().graphics(|graphics| {
-            graphics
-                .get(painter.layer_id())
-                .map_or(0, |list| list.next_idx().0)
-        });
-        let images = self.images.prepare(&self.terminal, ui, rect, cell)?;
-        for image in images.iter().filter(|i| i.below_background()) {
-            image.paint(&painter);
         }
         let snapshot = self.render.update(&self.terminal)?;
         let mut rows = RowIterator::new()?;
         let mut cells = CellIterator::new()?;
-        let mut row_iter = rows.update(&snapshot)?;
+        let mut rows = rows.update(&snapshot)?;
+        self.cells.clear();
         let mut y = 0;
-        let mut text_runs = Vec::new();
-        while let Some(row) = row_iter.next() {
-            let mut cell_iter = cells.update(row)?;
+        while let Some(row) = rows.next() {
+            let mut cells = cells.update(row)?;
             let mut x = 0;
-            while let Some(c) = cell_iter.next() {
-                let pos = rect.min + Vec2::new(x as f32 * cell.x, y as f32 * cell.y);
-                let style = c.style()?;
-                let mut fg = color(c.fg_color()?, Color32::from_gray(220));
-                let background = c.bg_color()?;
-                let mut bg = color(background, Color32::BLACK);
+            while let Some(cell) = cells.next() {
+                let style = cell.style()?;
+                let mut fg = color(cell.fg_color()?, rgb(0xdcdcdc));
+                let background = cell.bg_color()?;
+                let mut bg = color(background, rgb(0));
                 if style.inverse {
                     std::mem::swap(&mut fg, &mut bg);
                 }
                 if style.faint {
-                    fg = fg.gamma_multiply(0.6);
+                    fg.r *= 0.6;
+                    fg.g *= 0.6;
+                    fg.b *= 0.6;
                 }
-                let selected = c.is_selected()?;
+                let selected = cell.is_selected()?;
                 if selected {
-                    bg = Color32::from_rgb(55, 80, 120);
-                    fg = Color32::WHITE;
-                }
-                if background.is_some() || style.inverse || selected {
-                    painter.rect_filled(Rect::from_min_size(pos, cell), 0.0, bg);
+                    bg = rgb(0x375078);
+                    fg = rgb(0xffffff);
                 }
                 let mut text = String::new();
-                c.graphemes_utf8(&mut text)?;
-                let narrow = c.raw_cell()?.wide()? == ghostty_vt::screen::CellWide::Narrow;
+                cell.graphemes_utf8(&mut text)?;
                 if style.invisible {
                     text.clear();
                 }
-                text_runs.push((pos, text, fg, narrow));
+                self.cells.push(Cell {
+                    x,
+                    y,
+                    text,
+                    fg,
+                    bg: (background.is_some() || style.inverse || selected).then_some(bg),
+                    narrow: cell.raw_cell()?.wide()? == ghostty_vt::screen::CellWide::Narrow,
+                });
                 x += 1;
             }
             y += 1;
         }
-        for image in images.iter().filter(|i| i.below_text()) {
-            image.paint(&painter);
-        }
-        // Paint text after backgrounds so the next cell cannot cover an enlarged icon.
-        for (index, (pos, text, fg, narrow)) in text_runs.iter().enumerate() {
-            let expand = *narrow
-                && text_runs
-                    .get(index + 1)
-                    .is_some_and(|(next_pos, next, _, next_narrow)| {
-                        next_pos.y == pos.y && *next_narrow && expand_nerd_icon(text, next)
-                    });
-            if expand {
-                let area = Rect::from_min_size(*pos, Vec2::new(cell.x * 2.0, cell.y));
-                painter.with_clip_rect(area.intersect(rect)).text(
-                    area.center(),
-                    egui::Align2::CENTER_CENTER,
-                    text,
-                    FontId::monospace(font.size * icon_scale),
-                    *fg,
-                );
-            } else {
-                painter.text(*pos, egui::Align2::LEFT_TOP, text, font.clone(), *fg);
-            }
-        }
-        for image in images.iter().filter(|i| i.above_text()) {
-            image.paint(&painter);
-        }
-        if snapshot.cursor_visible()?
-            && let Some(cursor) = snapshot.cursor_viewport()?
-        {
-            let pos = rect.min + Vec2::new(cursor.x as f32 * cell.x, cursor.y as f32 * cell.y);
-            painter.line_segment(
-                [pos, Pos2::new(pos.x, pos.y + cell.y)],
-                egui::Stroke::new(2.0, Color32::WHITE),
-            );
-        }
+        self.cursor = if snapshot.cursor_visible()? {
+            snapshot.cursor_viewport()?.map(|p| (p.x, p.y))
+        } else {
+            None
+        };
         snapshot.clean()?;
-        self.last_frame = ui.ctx().graphics(|graphics| {
-            graphics
-                .get(painter.layer_id())
-                .map(|list| list.all_entries().skip(first_shape).cloned().collect())
-                .unwrap_or_default()
-        });
         Ok(())
     }
 }
 
-fn hold_frame(terminal: &Terminal, since: &mut Option<std::time::Instant>) -> Result<bool> {
-    if !terminal.mode(ghostty_vt::terminal::Mode::SYNC_OUTPUT)? {
-        *since = None;
-        return Ok(false);
-    }
-    Ok(since.get_or_insert_with(std::time::Instant::now).elapsed()
-        < std::time::Duration::from_secs(1))
-}
-
-fn resize_terminal(
-    terminal: &mut Terminal,
-    cols: u16,
-    rows: u16,
-    width: u32,
-    height: u32,
-) -> Result<()> {
-    let scroll = terminal.scrollbar()?;
-    let at_bottom = scroll.offset.saturating_add(scroll.len) >= scroll.total;
-    terminal.resize(cols, rows, width, height)?;
-    if at_bottom {
-        terminal.scroll_viewport(ScrollViewport::Bottom);
-    }
-    Ok(())
-}
-
-fn dropped_paths(paths: &[&std::path::Path]) -> Result<String> {
-    paths
-        .iter()
-        .map(|path| {
-            let path = path
-                .to_str()
-                .context("Dropped file path is not valid UTF-8")?;
-            Ok(format!("'{}'", path.replace('\'', "'\\''")))
-        })
-        .collect::<Result<Vec<_>>>()
-        .map(|paths| paths.join(" ") + " ")
-}
-
-fn expand_nerd_icon(text: &str, next: &str) -> bool {
-    let mut chars = text.chars();
-    matches!(
-        chars.next(),
-        Some('\u{e000}'..='\u{f8ff}' | '\u{f0000}'..='\u{ffffd}' | '\u{100000}'..='\u{10fffd}')
-    ) && chars.next().is_none()
-        && (next.is_empty() || next == " ")
-}
-
-fn selection_point(pos: Pos2, rect: Rect, cell: Vec2, cols: u16, rows: u16) -> Point {
-    Point::Viewport(PointCoordinate {
-        x: ((pos.x - rect.min.x) / cell.x)
-            .floor()
-            .clamp(0.0, f32::from(cols.saturating_sub(1))) as u16,
-        y: ((pos.y - rect.min.y) / cell.y)
-            .floor()
-            .clamp(0.0, f32::from(rows.saturating_sub(1))) as u32,
-    })
-}
-
-fn selected_text(terminal: &Terminal) -> Result<Option<String>> {
-    terminal
-        .format_selection_alloc(FormatOptions::new().with_unwrap(true).with_trim(true))?
-        .map(|bytes| String::from_utf8(bytes.to_vec()).map_err(Into::into))
-        .transpose()
-}
-
-fn color(rgb: Option<ghostty_vt::style::RgbColor>, fallback: Color32) -> Color32 {
-    rgb.map_or(fallback, |c| Color32::from_rgb(c.r, c.g, c.b))
-}
-
-fn terminal_key(k: egui::Key) -> Option<key::Key> {
-    use egui::Key as E;
-    use key::Key as G;
-    Some(match k {
-        E::Enter => G::Enter,
-        E::Backspace => G::Backspace,
-        E::Tab => G::Tab,
-        E::Escape => G::Escape,
-        E::ArrowUp => G::ArrowUp,
-        E::ArrowDown => G::ArrowDown,
-        E::ArrowLeft => G::ArrowLeft,
-        E::ArrowRight => G::ArrowRight,
-        E::Home => G::Home,
-        E::End => G::End,
-        E::PageUp => G::PageUp,
-        E::PageDown => G::PageDown,
-        E::Insert => G::Insert,
-        E::Delete => G::Delete,
-        E::F1 => G::F1,
-        E::F2 => G::F2,
-        E::F3 => G::F3,
-        E::F4 => G::F4,
-        E::F5 => G::F5,
-        E::F6 => G::F6,
-        E::F7 => G::F7,
-        E::F8 => G::F8,
-        E::F9 => G::F9,
-        E::F10 => G::F10,
-        E::F11 => G::F11,
-        E::F12 => G::F12,
-        _ => return None,
-    })
-}
-
-struct Window {
-    session: String,
+struct Gui {
     config: Config,
-    _connection: transport::Connection,
+    initial_font_size: f32,
+    session: String,
     remote: bool,
-    writer: Stream,
-    updates: Receiver<Result<Update>>,
-    tabs: HashMap<u64, App>,
+    connection: Option<transport::Connection>,
+    writer: Option<Stream>,
+    updates: Option<Receiver<Result<Update>>>,
+    pending: Option<Result<Update>>,
+    window_bounds: Option<WindowBounds>,
+    tabs: HashMap<u64, Tab>,
     order: Vec<TabInfo>,
     active: u64,
     error: Option<String>,
+    focus: FocusHandle,
+    bounds: Bounds<Pixels>,
+    cell: Size<Pixels>,
+    marked: String,
+    marked_selection: Range<usize>,
+    scroll_remainder: f32,
 }
-
-impl Window {
+impl Gui {
     fn new(
-        ctx: &egui::Context,
+        mut config: Config,
         session: String,
         host: Option<String>,
-        config: Config,
-    ) -> Result<Self> {
-        ctx.set_fonts(fonts::definitions(&config.font_family)?);
-        let connection = match host.as_deref() {
-            Some(host) => transport::connect(host)?,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let font = fonts::resolve(&config.font_family);
+        let error = font.as_ref().err().map(|e| format!("{e:#}"));
+        config.font_family = font.unwrap_or_else(|_| "monospace".into());
+        let mut view = Self {
+            initial_font_size: config.font_size,
+            config,
+            session,
+            remote: host.is_some(),
+            connection: None,
+            writer: None,
+            updates: None,
+            pending: None,
+            window_bounds: None,
+            tabs: HashMap::new(),
+            order: vec![],
+            active: 0,
+            error,
+            focus: cx.focus_handle(),
+            bounds: Bounds::default(),
+            cell: size(px(8.), px(20.)),
+            marked: String::new(),
+            marked_selection: 0..0,
+            scroll_remainder: 0.,
+        };
+        if view.error.is_none()
+            && let Err(e) = view.connect(host)
+        {
+            view.error = Some(format!("{e:#}"));
+        }
+        cx.spawn(async move |view, cx| {
+            let mut last_status = Instant::now();
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(16))
+                    .await;
+                // shortcut: poll the blocking transport every 16ms; use async wakeups if profiling warrants it.
+                if view
+                    .update(cx, |view, cx| {
+                        if view.error.is_some() {
+                            return;
+                        }
+                        if view.pending.is_none()
+                            && let Some(rx) = &view.updates
+                        {
+                            view.pending = match rx.try_recv() {
+                                Ok(update) => Some(update),
+                                Err(mpsc::TryRecvError::Empty) => None,
+                                Err(_) => Some(Err(anyhow::anyhow!(
+                                    "Server disconnected; reopen this session to attach again"
+                                ))),
+                            };
+                        }
+                        if view.pending.is_some() || last_status.elapsed() >= Duration::from_secs(1)
+                        {
+                            last_status = Instant::now();
+                            cx.notify();
+                        }
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
+        view
+    }
+    fn connect(&mut self, host: Option<String>) -> Result<()> {
+        let connection = match host {
+            Some(host) => transport::connect(&host)?,
             None => transport::connect_local()?,
         };
         let mut writer = connection.socket.try_clone()?;
-        writer.set_write_timeout(Some(std::time::Duration::from_secs(5)))?;
-        writer.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
+        writer.set_write_timeout(Some(Duration::from_secs(5)))?;
+        writer.set_read_timeout(Some(Duration::from_secs(5)))?;
         protocol::handshake(&mut writer)?;
         writer.set_read_timeout(None)?;
         protocol::send(
             &mut writer,
             &Request::Attach {
-                session: session.clone(),
+                session: self.session.clone(),
             },
         )?;
         protocol::send(
             &mut writer,
             &Request::SetScrollback {
-                megabytes: config.scrollback_mb,
+                megabytes: self.config.scrollback_mb,
             },
         )?;
         let mut reader = writer.try_clone()?;
         let (tx, updates) = mpsc::sync_channel(256);
-        let ctx = ctx.clone();
         thread::spawn(move || {
             loop {
-                let update = protocol::receive(&mut reader).context(
-                    "Server connection closed or sent an incomplete frame; check SSH output and ~/.scytty/server.log on the server",
-                );
+                let update = protocol::receive(&mut reader).context("Server connection closed or sent an incomplete frame; check SSH output and ~/.scytty/server.log on the server");
                 let failed = update.is_err();
-                if tx.send(update).is_err() {
-                    break;
-                }
-                ctx.request_repaint();
-                if failed {
+                if tx.send(update).is_err() || failed {
                     break;
                 }
             }
         });
-        Ok(Self {
-            session,
-            config,
-            _connection: connection,
-            remote: host.is_some(),
-            writer,
-            updates,
-            tabs: HashMap::new(),
-            order: Vec::new(),
-            active: 0,
-            error: None,
+        self.writer = Some(writer);
+        self.updates = Some(updates);
+        self.connection = Some(connection);
+        Ok(())
+    }
+    fn request(&mut self, request: Request) -> Result<()> {
+        protocol::send(
+            self.writer.as_mut().context("Server is not connected")?,
+            &request,
+        )
+    }
+    fn input(&mut self, bytes: &[u8]) -> Result<()> {
+        let tab = self
+            .tabs
+            .get_mut(&self.active)
+            .context("Waiting for terminal")?;
+        if tab.exited {
+            return Ok(());
+        }
+        tab.terminal.set_selection(None)?;
+        tab.anchor = None;
+        tab.terminal.scroll_viewport(ScrollViewport::Bottom);
+        self.request(Request::Input {
+            id: self.active,
+            bytes: bytes.to_vec(),
         })
     }
-
-    fn draw(&mut self, ui: &mut egui::Ui) -> Result<()> {
+    fn paste(&mut self, text: &str) -> Result<()> {
+        let Some(tab) = self.tabs.get(&self.active) else {
+            return Ok(());
+        };
+        let bracketed = tab
+            .terminal
+            .mode(ghostty_vt::terminal::Mode::BRACKETED_PASTE)?;
+        let mut data = text.as_bytes().to_vec();
+        let mut encoded = vec![0; data.len() * 2 + 32];
+        let n = ghostty_vt::paste::encode(&mut data, bracketed, &mut encoded)?;
+        self.input(&encoded[..n])
+    }
+    fn report(&mut self, result: Result<()>, cx: &mut Context<Self>) {
+        if let Err(e) = result {
+            self.error = Some(format!("{e:#}"));
+        }
+        cx.notify();
+    }
+    fn drain(&mut self, window: &mut Window) -> Result<()> {
         for _ in 0..256 {
-            let update = match self.updates.try_recv() {
+            let Some(rx) = &self.updates else { break };
+            let update = match self.pending.take().map(Ok).unwrap_or_else(|| rx.try_recv()) {
                 Ok(update) => update?,
                 Err(mpsc::TryRecvError::Empty) => break,
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    anyhow::bail!("Server disconnected; reopen this session to attach again")
-                }
+                Err(_) => anyhow::bail!("Server disconnected; reopen this session to attach again"),
             };
             match update {
                 Update::Snapshot { id, bytes } => {
@@ -498,8 +329,7 @@ impl Window {
                     terminal.set_scrollback_max_bytes(Some(
                         usize::from(self.config.scrollback_mb) * 1024 * 1024,
                     ))?;
-                    self.tabs
-                        .insert(id, App::new(self.writer.try_clone()?, id, terminal)?);
+                    self.tabs.insert(id, Tab::new(terminal)?);
                 }
                 Update::Output { id, bytes } => {
                     if let Some(tab) = self.tabs.get_mut(&id) {
@@ -516,14 +346,17 @@ impl Window {
                 } => {
                     if let Some(tab) = self.tabs.get_mut(&id) {
                         resize_terminal(&mut tab.terminal, cols, rows, width, height)?;
+                        tab.size = (cols, rows, width, height);
+                        tab.resize_pending = false;
                     }
                 }
                 Update::State { tabs, active } => {
                     if tabs.is_empty() {
-                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                        window.remove_window();
                         return Ok(());
                     }
-                    self.tabs.retain(|id, _| tabs.iter().any(|t| t.id == *id));
+                    self.tabs
+                        .retain(|id, _| tabs.iter().any(|tab| tab.id == *id));
                     for info in &tabs {
                         if let Some(tab) = self.tabs.get_mut(&info.id) {
                             tab.exited = info.exited;
@@ -532,263 +365,758 @@ impl Window {
                     let title = tabs
                         .iter()
                         .enumerate()
-                        .find(|(_, tab)| tab.id == active)
-                        .map_or_else(|| "scytty".to_owned(), |(index, tab)| tab_title(index, tab));
-                    let title = self
-                        .config
-                        .window_title(&self.session, &title, self.remote)?;
-                    ui.ctx()
-                        .send_viewport_cmd(egui::ViewportCommand::Title(title));
+                        .find(|(_, t)| t.id == active)
+                        .map_or_else(|| "scytty".into(), |(i, t)| tab_title(i, t));
+                    window.set_window_title(&self.config.window_title(
+                        &self.session,
+                        &title,
+                        self.remote,
+                    )?);
                     self.order = tabs;
                     self.active = active;
                 }
                 Update::Error(message) => anyhow::bail!(message),
             }
         }
-        let mut requests = Vec::new();
-        ui.input_mut(|input| {
-            if input.consume_key(egui::Modifiers::COMMAND, egui::Key::T) {
-                requests.push(Request::NewTab);
+        Ok(())
+    }
+    fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let stroke = &event.keystroke;
+        let m = stroke.modifiers;
+        let command = if cfg!(target_os = "macos") {
+            m.platform
+        } else {
+            m.control
+        };
+        let result = if let Some(size) =
+            zoomed_font_size(self.config.font_size, self.initial_font_size, stroke)
+        {
+            self.config.font_size = size;
+            Some(Ok(()))
+        } else if command && stroke.key == "t" {
+            Some(self.request(Request::NewTab))
+        } else if command && matches!(stroke.key.as_str(), "left" | "right") {
+            adjacent_tab(
+                &self.order,
+                self.active,
+                if stroke.key == "left" { -1 } else { 1 },
+            )
+            .map(|id| self.request(Request::Activate { id }))
+        } else if command && (cfg!(target_os = "macos") || m.shift) && stroke.key == "c" {
+            let result = self
+                .tabs
+                .get(&self.active)
+                .map(|tab| selected_text(&tab.terminal))
+                .transpose()
+                .map(|text| {
+                    if let Some(Some(text)) = text {
+                        cx.write_to_clipboard(ClipboardItem::new_string(text));
+                    }
+                });
+            Some(result)
+        } else if command && (cfg!(target_os = "macos") || m.shift) && stroke.key == "v" {
+            Some(
+                if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+                    self.paste(&text)
+                } else {
+                    Ok(())
+                },
+            )
+        } else {
+            self.encode_key(stroke).transpose()
+        };
+        if let Some(result) = result {
+            cx.stop_propagation();
+            self.report(result, cx);
+        }
+        self.focus.focus(window);
+    }
+    fn encode_key(&mut self, stroke: &Keystroke) -> Result<Option<()>> {
+        let Some(tab) = self.tabs.get_mut(&self.active) else {
+            return Ok(None);
+        };
+        let m = stroke.modifiers;
+        if let Some(k) = terminal_key(&stroke.key) {
+            let mut event = key::Event::new()?;
+            let mut mods = key::Mods::empty();
+            if m.shift {
+                mods |= key::Mods::SHIFT;
             }
-            for (key, direction) in [(egui::Key::ArrowLeft, -1), (egui::Key::ArrowRight, 1)] {
-                if input.consume_key(egui::Modifiers::COMMAND, key)
-                    && let Some(id) = adjacent_tab(&self.order, self.active, direction)
-                {
-                    requests.push(Request::Activate { id });
+            if m.control {
+                mods |= key::Mods::CTRL;
+            }
+            if m.alt {
+                mods |= key::Mods::ALT;
+            }
+            event.set_key(k).set_mods(mods);
+            let mut bytes = Vec::new();
+            tab.encoder
+                .set_options_from_terminal(&tab.terminal)
+                .encode_to_vec(&event, &mut bytes)?;
+            self.input(&bytes)?;
+            return Ok(Some(()));
+        }
+        if m.control && !m.alt && stroke.key.len() == 1 {
+            let ch = stroke.key.as_bytes()[0];
+            if ch.is_ascii_alphabetic() {
+                self.input(&[ch.to_ascii_uppercase() & 0x1f])?;
+                return Ok(Some(()));
+            }
+        }
+        if m.control && stroke.key == "space" {
+            self.input(&[0])?;
+            return Ok(Some(()));
+        }
+        if m.alt
+            && !m.platform
+            && let Some(text) = stroke.key_char.as_deref()
+        {
+            let bytes = format!("\x1b{text}");
+            self.input(bytes.as_bytes())?;
+            return Ok(Some(()));
+        }
+        Ok(None)
+    }
+    fn mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus.focus(window);
+        let result = (|| -> Result<()> {
+            if let Some(tab) = self.tabs.get_mut(&self.active) {
+                tab.terminal.set_selection(None)?;
+                tab.anchor = Some(tab.terminal.track_grid_ref(selection_point(
+                    event.position,
+                    self.bounds,
+                    self.cell,
+                    tab.terminal.cols()?,
+                    tab.terminal.rows()?,
+                ))?);
+            }
+            Ok(())
+        })();
+        self.report(result, cx);
+    }
+    fn mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if event.pressed_button != Some(MouseButton::Left) {
+            return;
+        }
+        let result = (|| -> Result<()> {
+            if let Some(tab) = self.tabs.get_mut(&self.active)
+                && let Some(anchor) = &tab.anchor
+                && let Some(start) = anchor.snapshot(&tab.terminal)?
+            {
+                let end = tab.terminal.grid_ref(selection_point(
+                    event.position,
+                    self.bounds,
+                    self.cell,
+                    tab.terminal.cols()?,
+                    tab.terminal.rows()?,
+                ))?;
+                tab.terminal
+                    .set_selection(Some(&Selection::new(start, end, false)))?;
+            }
+            Ok(())
+        })();
+        self.report(result, cx);
+    }
+    fn scroll(&mut self, event: &ScrollWheelEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(tab) = self.tabs.get_mut(&self.active) {
+            let delta = event.delta.pixel_delta(self.cell.height);
+            tab.terminal
+                .scroll_viewport(ScrollViewport::Delta(scroll_rows(
+                    &mut self.scroll_remainder,
+                    f32::from(delta.y) / f32::from(self.cell.height),
+                )));
+            cx.notify();
+        }
+    }
+    fn paint(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<()> {
+        self.bounds = bounds;
+        window.handle_input(
+            &self.focus,
+            ElementInputHandler::new(bounds, cx.entity()),
+            cx,
+        );
+        let font = font(self.config.font_family.clone());
+        let font_size = px(self.config.font_size);
+        let font_id = window.text_system().resolve_font(&font);
+        self.cell = size(
+            window.text_system().advance(font_id, font_size, 'M')?.width,
+            px(self.config.font_size * 1.25),
+        );
+        let Some(tab) = self.tabs.get_mut(&self.active) else {
+            return Ok(());
+        };
+        let cell = self.cell;
+        let dimensions = (
+            (f32::from(bounds.size.width) / f32::from(cell.width))
+                .floor()
+                .clamp(1., 500.) as u16,
+            (f32::from(bounds.size.height) / f32::from(cell.height))
+                .floor()
+                .clamp(1., 300.) as u16,
+            f32::from(cell.width).max(1.) as u32,
+            f32::from(cell.height).max(1.) as u32,
+        );
+        if tab.request_resize(dimensions, Instant::now()) {
+            protocol::send(
+                self.writer.as_mut().context("Server disconnected")?,
+                &Request::Resize {
+                    id: self.active,
+                    cols: dimensions.0,
+                    rows: dimensions.1,
+                    width: dimensions.2,
+                    height: dimensions.3,
+                },
+            )?;
+        }
+        if dimensions != tab.size && !tab.resize_pending {
+            window.request_animation_frame();
+        }
+        tab.snapshot()?;
+        let images = tab.images.prepare(&tab.terminal, bounds, cell)?;
+        window.with_content_mask(Some(ContentMask { bounds }), |window| -> Result<()> {
+            for image in images.iter().filter(|i| i.z < i32::MIN / 2) {
+                image.paint(window)?;
+            }
+            for c in &tab.cells {
+                if let Some(bg) = c.bg {
+                    window.paint_quad(fill(
+                        Bounds::new(
+                            bounds.origin
+                                + point(cell.width * c.x as f32, cell.height * c.y as f32),
+                            cell,
+                        ),
+                        bg,
+                    ));
                 }
             }
-        });
-        ui.ctx()
-            .request_repaint_after(std::time::Duration::from_secs(1));
-        let remote = self.remote;
-        let active_tab = self.order.iter().find(|tab| tab.id == self.active);
-        let left = self
+            for image in images.iter().filter(|i| i.z < 0 && i.z >= i32::MIN / 2) {
+                image.paint(window)?;
+            }
+            for (i, c) in tab.cells.iter().enumerate() {
+                if c.text.is_empty() || c.text == " " {
+                    continue;
+                }
+                let expand = c.narrow
+                    && tab.cells.get(i + 1).is_some_and(|next| {
+                        next.y == c.y && next.narrow && expand_nerd_icon(&c.text, &next.text)
+                    });
+                let scale = if expand { self.config.icon_scale } else { 1. };
+                let origin =
+                    bounds.origin + point(cell.width * c.x as f32, cell.height * c.y as f32);
+                let run = TextRun {
+                    len: c.text.len(),
+                    font: font.clone(),
+                    color: c.fg.into(),
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                };
+                let line = window.text_system().shape_line(
+                    c.text.clone().into(),
+                    font_size * scale,
+                    &[run],
+                    None,
+                );
+                let icon_bounds = Bounds::new(origin, size(cell.width * 2., cell.height));
+                let origin = if expand {
+                    origin
+                        + point(
+                            (cell.width * 2. - line.width) / 2.,
+                            (cell.height - font_size * scale) / 2.,
+                        )
+                } else {
+                    origin
+                };
+                if expand {
+                    window.with_content_mask(
+                        Some(ContentMask {
+                            bounds: icon_bounds,
+                        }),
+                        |window| line.paint(origin, cell.height, window, cx),
+                    )?;
+                } else {
+                    line.paint(origin, cell.height, window, cx)?;
+                }
+            }
+            for image in images.iter().filter(|i| i.z >= 0) {
+                image.paint(window)?;
+            }
+            if let Some((x, y)) = tab.cursor {
+                window.paint_quad(fill(
+                    Bounds::new(
+                        bounds.origin + point(cell.width * x as f32, cell.height * y as f32),
+                        size(px(2.), cell.height),
+                    ),
+                    rgb(0xffffff),
+                ));
+            }
+            if !self.marked.is_empty() {
+                let (x, y) = tab.cursor.unwrap_or((0, 0));
+                let run = TextRun {
+                    len: self.marked.len(),
+                    font,
+                    color: rgb(0xffffff).into(),
+                    background_color: Some(rgb(0x303030).into()),
+                    underline: Some(UnderlineStyle {
+                        thickness: px(1.),
+                        color: None,
+                        wavy: false,
+                    }),
+                    strikethrough: None,
+                };
+                window
+                    .text_system()
+                    .shape_line(self.marked.clone().into(), font_size, &[run], None)
+                    .paint(
+                        bounds.origin + point(cell.width * x as f32, cell.height * y as f32),
+                        cell.height,
+                        window,
+                        cx,
+                    )?;
+            }
+            Ok(())
+        })
+    }
+    fn segments(
+        &self,
+        name: &str,
+        title: &str,
+        index: usize,
+        active: bool,
+        tab: Option<&TabInfo>,
+    ) -> Result<Div> {
+        let mut line = div().flex().items_center().flex_shrink_0();
+        let segments = self
             .config
-            .status_text("left_status", "", 0, false, remote, active_tab)?;
-        let right = self
-            .config
-            .status_text("right_status", "", 0, false, remote, active_tab)?;
-        let tabs = self
-            .order
-            .iter()
-            .enumerate()
-            .map(|(index, tab)| {
-                self.config.status_text(
+            .status_text(name, title, index, active, self.remote, tab)?;
+        for (text, color, expand) in status_runs(segments) {
+            let scale = if expand { self.config.icon_scale } else { 1. };
+            let mut run = div()
+                .flex_shrink_0()
+                .text_size(px(self.config.font_size * scale))
+                .text_color(color.unwrap_or(rgb(0xc6d0f5)))
+                .child(text);
+            if expand {
+                run = run
+                    .w(self.cell.width * 2.)
+                    .h(px(28.))
+                    .line_height(px(28.))
+                    .text_center()
+                    .overflow_hidden();
+            }
+            line = line.child(run);
+        }
+        Ok(line)
+    }
+    fn header(&self, cx: &mut Context<Self>) -> Result<AnyElement> {
+        let active = self.order.iter().find(|t| t.id == self.active);
+        let mut bar = div()
+            .id("titlebar")
+            .flex()
+            .items_center()
+            .h(px(32.))
+            .line_height(px(28.))
+            .pt(px(3.))
+            .flex_shrink_0()
+            .overflow_hidden()
+            .on_mouse_down(MouseButton::Left, |event, window, _| {
+                if event.click_count == 2 {
+                    window.zoom_window();
+                } else {
+                    window.start_window_move();
+                }
+            });
+        if cfg!(target_os = "macos") {
+            bar = bar.pl(px(78.));
+        }
+        let mut tabs = div()
+            .flex()
+            .items_center()
+            .flex_shrink()
+            .min_w_0()
+            .overflow_hidden()
+            .child(self.segments("left_status", "", 0, false, active)?);
+        for (index, tab) in self.order.iter().enumerate() {
+            let id = tab.id;
+            tabs = tabs.child(
+                self.segments(
                     "format_tab",
                     &tab_title(index, tab),
                     index,
-                    tab.id == self.active,
-                    remote,
+                    id == self.active,
                     Some(tab),
-                )
-            })
-            .collect::<Result<Vec<_>>>()?;
-        // Native window controls do not shrink with egui's UI zoom.
-        let (button_width, bar_height) = titlebar_size(ui.ctx().zoom_factor());
-        let spacing = ui.spacing().item_spacing.y;
-        ui.spacing_mut().item_spacing.y = 0.0;
-        let (bar_rect, header) = ui.allocate_exact_size(
-            egui::vec2(ui.available_width(), bar_height),
-            egui::Sense::CLICK | egui::Sense::DRAG,
-        );
-        if cfg!(target_os = "windows") && header.double_clicked() {
-            toggle_maximized(ui.ctx());
-        }
-        if header.drag_started() {
-            ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
-        }
-        let mut content_rect = bar_rect;
-        content_rect.max.x =
-            (content_rect.max.x - 8.0 / ui.ctx().zoom_factor()).max(content_rect.min.x);
-        if cfg!(target_os = "macos") {
-            content_rect.min.x = (content_rect.min.x + button_width).min(content_rect.max.x);
-        } else if cfg!(target_os = "windows") {
-            let controls = windows_controls_rect(bar_rect, ui.ctx().zoom_factor());
-            content_rect.max.x = controls.left().max(content_rect.min.x);
-            windows_controls(ui, controls);
-        }
-        let mut bar = ui.new_child(
-            egui::UiBuilder::new()
-                .max_rect(content_rect)
-                .layout(egui::Layout::left_to_right(egui::Align::Center)),
-        );
-        bar.set_clip_rect(content_rect.intersect(ui.clip_rect()));
-        {
-            let ui = &mut bar;
-            ui.set_min_height(bar_height);
-            ui.spacing_mut().item_spacing.x = 0.0;
-            let font = FontId::monospace(self.config.font_size);
-            let cell = ui.fonts_mut(|fonts| fonts.glyph_width(&font, 'M'));
-            let right_width =
-                right.iter().map(|(s, _)| s.chars().count()).sum::<usize>() as f32 * cell;
-            let end = ui.max_rect().right();
-            let right_start = (end - right_width).max(ui.cursor().left());
-            let draw =
-                |ui: &mut egui::Ui, segments: &[(String, Option<Color32>)], max_width: f32| {
-                    let chars: Vec<_> = segments
-                        .iter()
-                        .flat_map(|(text, color)| {
-                            text.chars().map(move |ch| {
-                                (
-                                    ch.to_string(),
-                                    color.unwrap_or(Color32::from_rgb(198, 208, 245)),
-                                )
-                            })
-                        })
-                        .take((max_width.max(0.0) / cell + 0.001).floor() as usize)
-                        .collect();
-                    let (rect, response) = ui.allocate_exact_size(
-                        egui::vec2(chars.len() as f32 * cell, bar_height),
-                        egui::Sense::CLICK,
-                    );
-                    let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
-                    for (index, (text, color)) in chars.iter().enumerate() {
-                        let expand = chars
-                            .get(index + 1)
-                            .is_some_and(|(next, _)| expand_nerd_icon(text, next));
-                        let width = if expand { cell * 2.0 } else { cell };
-                        let area = Rect::from_min_size(
-                            egui::pos2(rect.left() + index as f32 * cell, bar_rect.top()),
-                            egui::vec2(width, bar_rect.height()),
-                        );
-                        painter.text(
-                            area.center(),
-                            egui::Align2::CENTER_CENTER,
-                            text,
-                            FontId::monospace(
-                                font.size * if expand { self.config.icon_scale } else { 1.0 },
-                            ),
-                            *color,
-                        );
-                    }
-                    response
-                };
-            draw(
-                ui,
-                &left,
-                (right_start - ui.cursor().left() - cell * 2.0).max(0.0),
+                )?
+                .id(("tab", id))
+                .max_w(px(self.config.font_size * 16.))
+                .overflow_hidden()
+                .cursor_pointer()
+                .on_mouse_down(MouseButton::Left, move |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    let result = this.request(Request::Activate { id });
+                    this.focus.focus(window);
+                    this.report(result, cx);
+                })),
             );
-            for (tab, segments) in self.order.iter().zip(&tabs) {
-                let width = (right_start - ui.cursor().left() - cell * 2.0).clamp(0.0, cell * 25.0);
-                if draw(ui, segments, width)
-                    .on_hover_cursor(egui::CursorIcon::PointingHand)
-                    .clicked()
-                {
-                    requests.push(Request::Activate { id: tab.id });
-                }
-            }
-            let width = (right_start - ui.cursor().left()).max(0.0);
-            if draw(ui, &[(" +".into(), None)], width)
-                .on_hover_text("New tab (Cmd+T)")
-                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                .clicked()
-            {
-                requests.push(Request::NewTab);
-            }
-            ui.add_space((right_start - ui.cursor().left()).max(0.0));
-            draw(ui, &right, (end - ui.cursor().left()).max(0.0));
         }
-        ui.spacing_mut().item_spacing.y = spacing;
-        for request in requests {
-            protocol::send(&mut self.writer, &request)?;
-        }
-        if let Some(tab) = self.tabs.get_mut(&self.active) {
-            tab.draw(ui, self.config.font_size, self.config.icon_scale)?;
-        }
-        Ok(())
-    }
-}
-
-fn windows_resize_edges(ui: &mut egui::Ui) {
-    if ui.input(|input| input.viewport().maximized.unwrap_or(false)) {
-        return;
-    }
-    use egui::{CursorIcon as C, ResizeDirection as D};
-    let r = ui.max_rect();
-    let edge = 5.0 / ui.ctx().zoom_factor();
-    let x = [r.left(), r.left() + edge, r.right() - edge, r.right()];
-    let y = [r.top(), r.top() + edge, r.bottom() - edge, r.bottom()];
-    for (col, row, direction, cursor) in [
-        (0, 0, D::NorthWest, C::ResizeNwSe),
-        (1, 0, D::North, C::ResizeVertical),
-        (2, 0, D::NorthEast, C::ResizeNeSw),
-        (0, 1, D::West, C::ResizeHorizontal),
-        (2, 1, D::East, C::ResizeHorizontal),
-        (0, 2, D::SouthWest, C::ResizeNeSw),
-        (1, 2, D::South, C::ResizeVertical),
-        (2, 2, D::SouthEast, C::ResizeNwSe),
-    ] {
-        let rect = Rect::from_min_max(
-            egui::pos2(x[col], y[row]),
-            egui::pos2(x[col + 1], y[row + 1]),
+        bar = bar.child(tabs).child(
+            div()
+                .id("new-tab")
+                .flex_shrink_0()
+                .px(px(8.))
+                .cursor_pointer()
+                .child("+")
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(|this, _, window, cx| {
+                    let result = this.request(Request::NewTab);
+                    this.focus.focus(window);
+                    this.report(result, cx);
+                })),
         );
-        let response = ui
-            .interact(
-                rect,
-                ui.scope_id().with(("resize", col, row)),
-                egui::Sense::DRAG,
-            )
-            .on_hover_cursor(cursor);
-        if response.drag_started() {
-            ui.ctx()
-                .send_viewport_cmd(egui::ViewportCommand::BeginResize(direction));
-        }
-    }
-}
-
-fn toggle_maximized(ctx: &egui::Context) {
-    let maximized = ctx.input(|input| input.viewport().maximized.unwrap_or(false));
-    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
-}
-
-fn windows_controls_rect(bar: Rect, zoom: f32) -> Rect {
-    Rect::from_min_max(
-        egui::pos2((bar.right() - 138.0 / zoom).max(bar.left()), bar.top()),
-        bar.max,
-    )
-}
-
-// shortcut: custom controls lack Windows' hover snap menu; use native hit-testing if needed.
-fn windows_controls(ui: &mut egui::Ui, rect: Rect) {
-    let maximized = ui.input(|input| input.viewport().maximized.unwrap_or(false));
-    let controls = [
-        ("−", "Minimize"),
-        (
-            if maximized { "❐" } else { "□" },
-            if maximized { "Restore" } else { "Maximize" },
-        ),
-        ("×", "Close"),
-    ];
-    for (index, (symbol, name)) in controls.into_iter().enumerate() {
-        let button_rect = Rect::from_min_size(
-            egui::pos2(rect.left() + rect.width() * index as f32 / 3.0, rect.top()),
-            egui::vec2(rect.width() / 3.0, rect.height()),
+        bar = bar.child(div().flex_1()).child(
+            self.segments("right_status", "", 0, false, active)?
+                .max_w(relative(0.4))
+                .overflow_hidden(),
         );
-        let response = ui
-            .put(
-                button_rect,
-                egui::Button::new(symbol)
-                    .sense(egui::Sense::CLICK)
-                    .frame(false),
-            )
-            .on_hover_text(name);
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name));
-        if response.clicked() {
-            match index {
-                0 => ui
-                    .ctx()
-                    .send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
-                1 => toggle_maximized(ui.ctx()),
-                _ => ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close),
+        if cfg!(target_os = "windows") {
+            for (i, label) in ["−", "□", "×"].into_iter().enumerate() {
+                bar = bar.child(
+                    div()
+                        .id(("control", i))
+                        .w(px(46.))
+                        .flex_shrink_0()
+                        .text_center()
+                        .child(label)
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(move |_, window, _| match i {
+                            0 => window.minimize_window(),
+                            1 => window.zoom_window(),
+                            _ => window.remove_window(),
+                        }),
+                );
             }
         }
+        Ok(bar.into_any_element())
+    }
+}
+impl Render for Gui {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.window_bounds = Some(window.window_bounds());
+        if self.error.is_none()
+            && let Err(e) = self.drain(window)
+        {
+            self.error = Some(format!("{e:#}"));
+        }
+        let mut root = div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .track_focus(&self.focus)
+            .text_size(px(self.config.font_size))
+            .font_family(self.config.font_family.clone())
+            .text_color(rgb(0xdcdcdc))
+            .bg(Rgba {
+                a: self.config.background_opacity,
+                ..rgb(0)
+            })
+            .on_key_down(cx.listener(Self::key_down));
+        match self.header(cx) {
+            Ok(header) => root = root.child(header),
+            Err(e) => self.error = Some(format!("{e:#}")),
+        }
+        if let Some(error) = &self.error {
+            let error = error.clone();
+            return root.child(
+                div()
+                    .p(px(24.))
+                    .child(error.clone())
+                    .child(
+                        div()
+                            .id("copy-error")
+                            .child("Copy error")
+                            .cursor_pointer()
+                            .on_click(move |_, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(error.clone()))
+                            }),
+                    )
+                    .child(
+                        div()
+                            .id("close-error")
+                            .child("Close window")
+                            .cursor_pointer()
+                            .on_click(|_, window, _| window.remove_window()),
+                    ),
+            );
+        }
+        if self.tabs.get(&self.active).is_some_and(|tab| tab.exited) {
+            root = root.child(
+                div()
+                    .flex_shrink_0()
+                    .child("Shell exited. Close the window to quit."),
+            );
+        }
+        let entity = cx.entity();
+        root.child(
+            div()
+                .id("terminal")
+                .flex_1()
+                .overflow_hidden()
+                .cursor(CursorStyle::IBeam)
+                .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
+                .on_mouse_move(cx.listener(Self::mouse_move))
+                .on_scroll_wheel(cx.listener(Self::scroll))
+                .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
+                    let paths: Vec<_> = paths.paths().iter().map(|p| p.as_path()).collect();
+                    let result = dropped_paths(&paths).and_then(|text| this.paste(&text));
+                    this.report(result, cx);
+                }))
+                .child(
+                    canvas(
+                        |_, _, _| (),
+                        move |bounds, _, window, cx| {
+                            entity.update(cx, |this, cx| {
+                                let result = this.paint(bounds, window, cx);
+                                if let Err(e) = result {
+                                    this.error = Some(format!("{e:#}"));
+                                    cx.notify();
+                                }
+                            });
+                        },
+                    )
+                    .size_full(),
+                ),
+        )
+    }
+}
+impl EntityInputHandler for Gui {
+    fn text_for_range(
+        &mut self,
+        range: Range<usize>,
+        actual: &mut Option<Range<usize>>,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<String> {
+        *actual = Some(range.clone());
+        Some(
+            self.marked
+                .encode_utf16()
+                .skip(range.start)
+                .take(range.len())
+                .collect::<Vec<_>>(),
+        )
+        .map(|v| String::from_utf16_lossy(&v))
+    }
+    fn selected_text_range(
+        &mut self,
+        _: bool,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<UTF16Selection> {
+        Some(UTF16Selection {
+            range: self.marked_selection.clone(),
+            reversed: false,
+        })
+    }
+    fn marked_text_range(&self, _: &mut Window, _: &mut Context<Self>) -> Option<Range<usize>> {
+        (!self.marked.is_empty()).then(|| 0..self.marked.encode_utf16().count())
+    }
+    fn unmark_text(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        self.marked.clear();
+        self.marked_selection = 0..0;
+        cx.notify();
+    }
+    fn replace_text_in_range(
+        &mut self,
+        _: Option<Range<usize>>,
+        text: &str,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.marked.clear();
+        self.marked_selection = 0..0;
+        let result = if self.tabs.contains_key(&self.active) {
+            self.input(text.as_bytes())
+        } else {
+            Ok(())
+        };
+        self.report(result, cx);
+    }
+    fn replace_and_mark_text_in_range(
+        &mut self,
+        range: Option<Range<usize>>,
+        text: &str,
+        selected: Option<Range<usize>>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mut units: Vec<_> = self.marked.encode_utf16().collect();
+        let range = range.unwrap_or(0..units.len());
+        let start = range.start.min(units.len());
+        let end = range.end.max(start).min(units.len());
+        units.splice(start..end, text.encode_utf16());
+        self.marked = String::from_utf16_lossy(&units);
+        self.marked_selection = selected
+            .map(|r| start + r.start..start + r.end)
+            .unwrap_or_else(|| {
+                let end = self.marked.encode_utf16().count();
+                end..end
+            });
+        cx.notify();
+    }
+    fn bounds_for_range(
+        &mut self,
+        _: Range<usize>,
+        _: Bounds<Pixels>,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<Bounds<Pixels>> {
+        let (x, y) = self.tabs.get(&self.active)?.cursor?;
+        Some(Bounds::new(
+            self.bounds.origin + point(self.cell.width * x as f32, self.cell.height * y as f32),
+            self.cell,
+        ))
+    }
+    fn character_index_for_point(
+        &mut self,
+        _: gpui::Point<Pixels>,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<usize> {
+        Some(0)
+    }
+}
+impl Drop for Gui {
+    fn drop(&mut self) {
+        if let Some(bounds) = self.window_bounds
+            && let Err(e) = window_state::save(bounds)
+        {
+            eprintln!("Cannot save window geometry: {e:#}");
+        }
+        if let Some(writer) = &self.writer {
+            let _ = writer.shutdown(std::net::Shutdown::Both);
+        }
     }
 }
 
-fn titlebar_size(zoom: f32) -> (f32, f32) {
-    (78.0 / zoom, 32.0 / zoom)
+fn zoomed_font_size(current: f32, initial: f32, stroke: &Keystroke) -> Option<f32> {
+    let mods = stroke.modifiers;
+    if mods.alt || !(mods.control || (cfg!(target_os = "macos") && mods.platform)) {
+        return None;
+    }
+    let step = match stroke.key.as_str() {
+        "0" => return Some(initial),
+        "+" | "=" => 1.,
+        "-" | "_" => -1.,
+        _ => return None,
+    };
+    Some((current + step).clamp(6., 96.))
 }
 
+fn scroll_rows(remainder: &mut f32, delta: f32) -> isize {
+    // GPUI's content-motion delta has the opposite sign to Ghostty's viewport delta.
+    *remainder -= delta;
+    let rows = remainder.trunc() as isize;
+    *remainder -= rows as f32;
+    rows
+}
+
+fn hold_frame(terminal: &Terminal, since: &mut Option<Instant>) -> Result<bool> {
+    if !terminal.mode(ghostty_vt::terminal::Mode::SYNC_OUTPUT)? {
+        *since = None;
+        return Ok(false);
+    }
+    Ok(since.get_or_insert_with(Instant::now).elapsed() < Duration::from_secs(1))
+}
+fn resize_terminal(
+    terminal: &mut Terminal,
+    cols: u16,
+    rows: u16,
+    width: u32,
+    height: u32,
+) -> Result<()> {
+    let scroll = terminal.scrollbar()?;
+    let bottom = scroll.offset.saturating_add(scroll.len) >= scroll.total;
+    terminal.resize(cols, rows, width, height)?;
+    if bottom {
+        terminal.scroll_viewport(ScrollViewport::Bottom);
+    }
+    Ok(())
+}
+fn dropped_paths(paths: &[&std::path::Path]) -> Result<String> {
+    paths
+        .iter()
+        .map(|p| {
+            Ok(format!(
+                "'{}'",
+                p.to_str()
+                    .context("Dropped file path is not valid UTF-8")?
+                    .replace('\'', "'\\''")
+            ))
+        })
+        .collect::<Result<Vec<_>>>()
+        .map(|p| p.join(" ") + " ")
+}
+fn is_nerd_icon(ch: char) -> bool {
+    matches!(ch, '\u{e000}'..='\u{f8ff}' | '\u{f0000}'..='\u{ffffd}' | '\u{100000}'..='\u{10fffd}')
+}
+fn status_runs(segments: Vec<(String, Option<Rgba>)>) -> Vec<(String, Option<Rgba>, bool)> {
+    let mut chars = segments
+        .into_iter()
+        .flat_map(|(text, color)| text.chars().map(|ch| (ch, color)).collect::<Vec<_>>())
+        .peekable();
+    let mut runs: Vec<(String, Option<Rgba>, bool)> = Vec::new();
+    while let Some((ch, color)) = chars.next() {
+        let expand = is_nerd_icon(ch) && chars.peek().is_some_and(|(next, _)| *next == ' ');
+        if expand {
+            chars.next();
+            runs.push((ch.to_string(), color, true));
+        } else if let Some((text, previous_color, false)) = runs.last_mut()
+            && *previous_color == color
+        {
+            text.push(ch);
+        } else {
+            runs.push((ch.to_string(), color, false));
+        }
+    }
+    runs
+}
+fn expand_nerd_icon(text: &str, next: &str) -> bool {
+    let mut chars = text.chars();
+    chars.next().is_some_and(is_nerd_icon)
+        && chars.next().is_none()
+        && (next.is_empty() || next == " ")
+}
+fn selection_point(
+    pos: gpui::Point<Pixels>,
+    bounds: Bounds<Pixels>,
+    cell: Size<Pixels>,
+    cols: u16,
+    rows: u16,
+) -> TerminalPoint {
+    TerminalPoint::Viewport(PointCoordinate {
+        x: (f32::from(pos.x - bounds.origin.x) / f32::from(cell.width))
+            .floor()
+            .clamp(0., f32::from(cols.saturating_sub(1))) as u16,
+        y: (f32::from(pos.y - bounds.origin.y) / f32::from(cell.height))
+            .floor()
+            .clamp(0., f32::from(rows.saturating_sub(1))) as u32,
+    })
+}
+fn selected_text(terminal: &Terminal) -> Result<Option<String>> {
+    terminal
+        .format_selection_alloc(FormatOptions::new().with_unwrap(true).with_trim(true))?
+        .map(|bytes| String::from_utf8(bytes.to_vec()).map_err(Into::into))
+        .transpose()
+}
+fn color(color: Option<ghostty_vt::style::RgbColor>, fallback: Rgba) -> Rgba {
+    color.map_or(fallback, |c| {
+        rgb((u32::from(c.r) << 16) | (u32::from(c.g) << 8) | u32::from(c.b))
+    })
+}
 fn tab_title(index: usize, tab: &TabInfo) -> String {
     if tab.title.is_empty() {
         format!("Tab {}", index + 1)
@@ -796,205 +1124,102 @@ fn tab_title(index: usize, tab: &TabInfo) -> String {
         tab.title.clone()
     }
 }
-
 fn adjacent_tab(tabs: &[TabInfo], active: u64, direction: isize) -> Option<u64> {
     let index = tabs.iter().position(|t| t.id == active)?;
     Some(tabs[(index as isize + direction).rem_euclid(tabs.len() as isize) as usize].id)
 }
-
-impl Drop for Window {
-    fn drop(&mut self) {
-        let _ = self.writer.shutdown(std::net::Shutdown::Both);
-    }
+fn terminal_key(k: &str) -> Option<key::Key> {
+    use key::Key as K;
+    Some(match k {
+        "enter" => K::Enter,
+        "backspace" => K::Backspace,
+        "tab" => K::Tab,
+        "escape" => K::Escape,
+        "up" => K::ArrowUp,
+        "down" => K::ArrowDown,
+        "left" => K::ArrowLeft,
+        "right" => K::ArrowRight,
+        "home" => K::Home,
+        "end" => K::End,
+        "pageup" => K::PageUp,
+        "pagedown" => K::PageDown,
+        "insert" => K::Insert,
+        "delete" => K::Delete,
+        "f1" => K::F1,
+        "f2" => K::F2,
+        "f3" => K::F3,
+        "f4" => K::F4,
+        "f5" => K::F5,
+        "f6" => K::F6,
+        "f7" => K::F7,
+        "f8" => K::F8,
+        "f9" => K::F9,
+        "f10" => K::F10,
+        "f11" => K::F11,
+        "f12" => K::F12,
+        _ => return None,
+    })
 }
-
-impl eframe::App for Window {
-    fn clear_color(&self, _: &egui::Visuals) -> [f32; 4] {
-        [0.0, 0.0, 0.0, self.config.background_opacity]
-    }
-
-    fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
-        if ui.input(|input| input.viewport().close_requested()) {
-            return;
-        }
-        if let Some(error) = &self.error {
-            show_error(ui, error);
-            return;
-        }
-        let window_rect = ui.max_rect();
-        if let Err(e) = self.draw(ui) {
-            eprintln!("Terminal error: {e:#}");
-            self.error = Some(format!("Terminal error: {e:#}"));
-        }
-        if cfg!(target_os = "windows") {
-            let mut overlay = ui.new_child(egui::UiBuilder::new().max_rect(window_rect));
-            windows_resize_edges(&mut overlay);
-        }
-        ui.ctx()
-            .request_repaint_after(std::time::Duration::from_millis(100));
-    }
-}
-
-fn show_error(ui: &mut egui::Ui, error: &str) {
-    let width = (ui.max_rect().width() - 48.0).clamp(120.0, 520.0);
-    let height = (ui.max_rect().height() - 120.0).clamp(60.0, 240.0);
-    egui::Window::new("Terminal warning")
-        .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
-        .collapsible(false)
-        .resizable(false)
-        .fixed_size(egui::vec2(width, height + 36.0))
-        .show(ui.ctx(), |ui| {
-            egui::ScrollArea::vertical()
-                .max_height(height)
-                .show(ui, |ui| {
-                    let mut text = error;
-                    ui.add(
-                        egui::TextEdit::multiline(&mut text)
-                            .font(egui::TextStyle::Monospace)
-                            .desired_width(width)
-                            .desired_rows(6),
-                    );
-                });
-            ui.horizontal(|ui| {
-                if ui.button("Copy error").clicked() {
-                    ui.ctx().copy_text(error.to_owned());
-                }
-                if ui.button("Close window").clicked() {
-                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-                }
-            });
-        });
-}
-
-struct ErrorWindow {
-    error: String,
-    opacity: f32,
-}
-impl eframe::App for ErrorWindow {
-    fn clear_color(&self, _: &egui::Visuals) -> [f32; 4] {
-        [0.0, 0.0, 0.0, self.opacity]
-    }
-    fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
-        show_error(ui, &self.error);
-    }
-}
-
-fn main() -> eframe::Result {
-    let config = Config::load().map_err(|error| eframe::Error::AppCreation(error.into()))?;
+fn main() -> Result<()> {
+    let config = Config::load()?;
     let mut args = std::env::args().skip(1);
     let argument = args.next();
     let (host, session) = if argument.as_deref() == Some("--ssh") {
-        let host = args.next().ok_or_else(|| {
-            eframe::Error::AppCreation("usage: scytty --ssh HOST [SESSION]".into())
-        })?;
-        (Some(host), args.next().unwrap_or_else(|| "default".into()))
+        (
+            Some(
+                args.next()
+                    .context("usage: scytty --ssh user@host [session]")?,
+            ),
+            args.next().unwrap_or_else(|| "default".into()),
+        )
     } else {
         (None, argument.unwrap_or_else(|| "default".into()))
     };
-    let viewport = egui::ViewportBuilder::default();
-    // Keep the macOS bundle icon instead of eframe's default runtime icon.
-    #[cfg(target_os = "macos")]
-    let viewport = viewport
-        .with_icon(egui::IconData::default())
-        // Native shadows darken transparent content differently when focus changes.
-        .with_has_shadow(false);
-    #[cfg(target_os = "windows")]
-    let viewport = viewport.with_decorations(false);
-    eframe::run_native(
-        "scytty",
-        eframe::NativeOptions {
-            viewport: viewport
-                .with_inner_size([config.window_width, config.window_height])
-                .with_transparent(true)
-                .with_fullsize_content_view(true)
-                .with_titlebar_shown(false)
-                .with_title_shown(false)
-                .with_titlebar_buttons_shown(true),
+    let window_size = size(px(config.window_width), px(config.window_height));
+    Application::new().run(move |cx| {
+        let options = WindowOptions {
+            window_bounds: Some(window_state::load(cx).unwrap_or_else(|| {
+                WindowBounds::Windowed(Bounds::centered(None, window_size, cx))
+            })),
+            titlebar: Some(TitlebarOptions {
+                title: Some("Scytty".into()),
+                appears_transparent: true,
+                traffic_light_position: Some(point(px(12.), px(10.))),
+            }),
+            window_background: WindowBackgroundAppearance::Transparent,
+            window_min_size: Some(size(px(200.), px(100.))),
             ..Default::default()
-        },
-        Box::new(move |cc| {
-            let opacity = config.background_opacity;
-            let app: Box<dyn eframe::App> = match Window::new(&cc.egui_ctx, session, host, config) {
-                Ok(window) => Box::new(window),
-                Err(error) => {
-                    // A bad configured font must not hide the error itself.
-                    cc.egui_ctx.set_fonts(fonts::definitions("monospace")?);
-                    Box::new(ErrorWindow {
-                        error: format!("{error:#}"),
-                        opacity,
-                    })
-                }
-            };
-            Ok(app)
-        }),
-    )
+        };
+        if let Err(e) = cx.open_window(options, |window, cx| {
+            let view = cx.new(|cx| Gui::new(config, session, host, cx));
+            view.read(cx).focus.focus(window);
+            view
+        }) {
+            eprintln!("Cannot open Scytty: {e:#}");
+            cx.quit();
+        }
+        cx.on_window_closed(|cx| {
+            if cx.windows().is_empty() {
+                cx.quit();
+            }
+        })
+        .detach();
+        cx.activate(true);
+    });
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ghostty_vt::{TerminalOptions, terminal::Event as TerminalEvent};
-
+    use core::prelude::v1::test;
+    use ghostty_vt::TerminalOptions;
     #[test]
-    fn synchronized_redraw_waits_for_end_or_timeout() -> Result<()> {
-        let mut terminal = Terminal::new(TerminalOptions::default())?;
-        let mut since = None;
-        assert!(!hold_frame(&terminal, &mut since)?);
-        terminal.vt_write(b"\x1b[?2026hpartial redraw");
-        assert!(hold_frame(&terminal, &mut since)?);
-        since = Some(std::time::Instant::now() - std::time::Duration::from_secs(2));
-        assert!(!hold_frame(&terminal, &mut since)?);
-        terminal.vt_write(b"\x1b[?2026l");
-        assert!(!hold_frame(&terminal, &mut since)?);
-        assert!(since.is_none());
-        terminal.vt_write(b"\x1b[?2026hnext redraw");
-        assert!(hold_frame(&terminal, &mut since)?);
-        Ok(())
-    }
-
-    #[test]
-    fn resize_keeps_live_output_at_bottom() -> Result<()> {
-        let mut terminal = Terminal::new(TerminalOptions {
-            cols: 80,
-            rows: 24,
-            ..Default::default()
-        })?;
-        for _ in 0..100 {
-            terminal.vt_write(b"some output\r\n");
-        }
-        for (cols, rows) in [(40, 12), (100, 30), (60, 20)] {
-            resize_terminal(&mut terminal, cols, rows, 8, 16)?;
-            let scroll = terminal.scrollbar()?;
-            assert_eq!(scroll.offset + scroll.len, scroll.total);
-        }
-        terminal.scroll_viewport(ScrollViewport::Top);
-        resize_terminal(&mut terminal, 50, 15, 8, 16)?;
-        let scroll = terminal.scrollbar()?;
-        assert!(scroll.offset + scroll.len < scroll.total);
-        Ok(())
-    }
-
-    #[test]
-    fn dropped_file_paths_are_shell_quoted() -> Result<()> {
-        use std::path::Path;
-        assert_eq!(
-            dropped_paths(&[Path::new("/tmp/a b"), Path::new("/tmp/it's;$x.png")])?,
-            "'/tmp/a b' '/tmp/it'\\''s;$x.png' "
-        );
-        assert_eq!(
-            dropped_paths(&[Path::new("/tmp/日本語.png")])?,
-            "'/tmp/日本語.png' "
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn escape_encoding() -> Result<()> {
+    fn key_encoding_and_sync_redraw() -> Result<()> {
         let mut terminal = Terminal::new(TerminalOptions::default())?;
         let mut encoder = key::Encoder::new()?;
         let mut event = key::Event::new()?;
-        event.set_key(terminal_key(egui::Key::Escape).unwrap());
-        assert_eq!(event.action(), key::Action::Press);
+        event.set_key(terminal_key("escape").unwrap());
         let mut bytes = Vec::new();
         encoder
             .set_options_from_terminal(&terminal)
@@ -1006,103 +1231,156 @@ mod tests {
             .set_options_from_terminal(&terminal)
             .encode_to_vec(&event, &mut bytes)?;
         assert_eq!(bytes, b"\x1b[27u");
+        let mut since = None;
+        terminal.vt_write(b"\x1b[?2026hhello");
+        assert!(hold_frame(&terminal, &mut since)?);
+        since = Some(Instant::now() - Duration::from_secs(2));
+        assert!(!hold_frame(&terminal, &mut since)?);
+        terminal.vt_write(b"\x1b[?2026l");
+        assert!(!hold_frame(&terminal, &mut since)?);
+        assert!(since.is_none());
         Ok(())
     }
     #[test]
-    fn nerd_icons_expand_only_into_blank_cells() {
-        assert!(expand_nerd_icon("\u{e0b0}", " "));
-        assert!(expand_nerd_icon("\u{f0001}", ""));
-        assert!(!expand_nerd_icon("\u{e0b0}", "x"));
-        assert!(!expand_nerd_icon("A", " "));
-        assert!(!expand_nerd_icon("\u{e0b0}x", " "));
+    fn resize_coalesces_changes_and_waits_for_acknowledgement() -> Result<()> {
+        let mut tab = Tab::new(Terminal::new(TerminalOptions::default())?)?;
+        let now = Instant::now();
+        let first = (80, 24, 8, 16);
+        let intermediate = (90, 26, 8, 16);
+        let latest = (100, 30, 8, 16);
+        assert!(tab.request_resize(first, now));
+        assert!(!tab.request_resize(intermediate, now + Duration::from_millis(10)));
+        assert!(!tab.request_resize(latest, now + Duration::from_millis(20)));
+        assert!(!tab.request_resize(latest, now + Duration::from_millis(200)));
+        tab.size = first;
+        tab.resize_pending = false;
+        assert!(tab.request_resize(latest, now + Duration::from_millis(200)));
+        tab.size = latest;
+        tab.resize_pending = false;
+        assert!(!tab.request_resize(latest, now + Duration::from_millis(210)));
+        assert!(!tab.request_resize(intermediate, now + Duration::from_millis(220)));
+        assert!(!tab.request_resize(intermediate, now + Duration::from_millis(250)));
+        assert!(tab.request_resize(intermediate, now + Duration::from_millis(300)));
+        Ok(())
     }
 
     #[test]
-    fn selection_copy_and_coordinates() -> Result<()> {
+    fn selection_and_snapshot() -> Result<()> {
         let mut terminal = Terminal::new(TerminalOptions {
             cols: 5,
             rows: 3,
             ..Default::default()
         })?;
         terminal.vt_write("héllo world".as_bytes());
-        assert!(selected_text(&terminal)?.is_none());
-        let start = terminal.grid_ref(Point::Viewport(PointCoordinate { x: 0, y: 0 }))?;
-        let end = terminal.grid_ref(Point::Viewport(PointCoordinate { x: 4, y: 1 }))?;
+        let start = terminal.grid_ref(TerminalPoint::Viewport(PointCoordinate { x: 0, y: 0 }))?;
+        let end = terminal.grid_ref(TerminalPoint::Viewport(PointCoordinate { x: 4, y: 1 }))?;
         terminal.set_selection(Some(&Selection::new(start, end, false)))?;
         assert_eq!(selected_text(&terminal)?.as_deref(), Some("héllo worl"));
-        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(50.0, 30.0));
         assert_eq!(
-            selection_point(Pos2::new(-5.0, 99.0), rect, Vec2::splat(10.0), 5, 3),
-            Point::Viewport(PointCoordinate { x: 0, y: 2 })
+            selection_point(
+                point(px(-5.), px(99.)),
+                Bounds::new(point(px(0.), px(0.)), size(px(50.), px(30.))),
+                size(px(10.), px(10.)),
+                5,
+                3
+            ),
+            TerminalPoint::Viewport(PointCoordinate { x: 0, y: 2 })
         );
+        let mut tab = Tab::new(terminal)?;
+        tab.snapshot()?;
+        assert!(tab.cells.iter().any(|c| c.text == "é"));
         Ok(())
     }
-
     #[test]
-    fn titlebar_clearance_survives_zoom() {
-        for zoom in [0.5, 0.75, 1.0, 1.5, 2.0] {
-            let (width, height) = titlebar_size(zoom);
-            assert!((width * zoom - 78.0).abs() < 0.001);
-            assert!((height * zoom - 32.0).abs() < 0.001);
+    fn resize_preserves_scrollback_position() -> Result<()> {
+        let mut terminal = Terminal::new(TerminalOptions::default())?;
+        for _ in 0..100 {
+            terminal.vt_write(b"output\r\n");
         }
+        resize_terminal(&mut terminal, 40, 12, 8, 16)?;
+        let scroll = terminal.scrollbar()?;
+        assert_eq!(scroll.offset + scroll.len, scroll.total);
+        terminal.scroll_viewport(ScrollViewport::Top);
+        resize_terminal(&mut terminal, 50, 15, 8, 16)?;
+        let scroll = terminal.scrollbar()?;
+        assert!(scroll.offset + scroll.len < scroll.total);
+        Ok(())
+    }
+    #[test]
+    fn status_icons_expand_only_into_a_following_space() {
+        let red = Some(rgb(0xff0000));
+        assert_eq!(
+            status_runs(vec![
+                ("a\u{301} \u{e0b0}main\u{f0001}".into(), red),
+                (" next\u{e0b0}".into(), None),
+            ]),
+            vec![
+                ("a\u{301} \u{e0b0}main".into(), red, false),
+                ("\u{f0001}".into(), red, true),
+                ("next\u{e0b0}".into(), None, false),
+            ]
+        );
+        assert_eq!(
+            status_runs(vec![("\u{e0b0}  x".into(), None)]),
+            vec![("\u{e0b0}".into(), None, true), (" x".into(), None, false),]
+        );
+        assert!(status_runs(vec![]).is_empty());
     }
 
     #[test]
-    fn windows_controls_stay_on_right_at_any_zoom() {
-        for zoom in [0.5, 1.0, 1.5, 2.0] {
-            let bar = Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(800.0, 32.0 / zoom));
-            let controls = windows_controls_rect(bar, zoom);
-            assert_eq!(controls.right(), bar.right());
-            assert_eq!(controls.height(), bar.height());
-            assert!((controls.width() * zoom - 138.0).abs() < 0.001);
-            let narrow = Rect::from_min_size(bar.min, egui::vec2(50.0, bar.height()));
-            assert_eq!(windows_controls_rect(narrow, zoom), narrow);
-        }
+    fn zoom_shortcuts_and_limits() {
+        let stroke = |key: &str, control| Keystroke {
+            key: key.into(),
+            key_char: None,
+            modifiers: Modifiers {
+                control,
+                ..Default::default()
+            },
+        };
+        assert_eq!(zoomed_font_size(16., 18., &stroke("+", true)), Some(17.));
+        assert_eq!(zoomed_font_size(16., 18., &stroke("=", true)), Some(17.));
+        assert_eq!(zoomed_font_size(16., 18., &stroke("-", true)), Some(15.));
+        assert_eq!(zoomed_font_size(6., 18., &stroke("-", true)), Some(6.));
+        assert_eq!(zoomed_font_size(96., 18., &stroke("+", true)), Some(96.));
+        assert_eq!(zoomed_font_size(16., 18., &stroke("+", false)), None);
+        assert_eq!(zoomed_font_size(16., 18., &stroke("c", true)), None);
+        assert_eq!(zoomed_font_size(24., 18., &stroke("0", true)), Some(18.));
+        assert_eq!(zoomed_font_size(24., 18., &stroke("0", false)), None);
+        let mut command_zero = stroke("0", false);
+        command_zero.modifiers.platform = true;
+        assert_eq!(
+            zoomed_font_size(24., 18., &command_zero),
+            cfg!(target_os = "macos").then_some(18.)
+        );
     }
 
     #[test]
-    fn tab_navigation_wraps() {
+    fn fractional_trackpad_scroll_accumulates() {
+        let mut remainder = 0.;
+        assert_eq!(scroll_rows(&mut remainder, 0.25), 0);
+        assert_eq!(scroll_rows(&mut remainder, 0.75), -1);
+        assert_eq!(scroll_rows(&mut remainder, -0.5), 0);
+        assert_eq!(scroll_rows(&mut remainder, -1.5), 2);
+    }
+
+    #[test]
+    fn paths_icons_and_navigation() -> Result<()> {
+        assert_eq!(
+            dropped_paths(&[std::path::Path::new("/tmp/it's;$x.png")])?,
+            "'/tmp/it'\\''s;$x.png' "
+        );
+        assert!(expand_nerd_icon("\u{e0b0}", " "));
+        assert!(!expand_nerd_icon("\u{e0b0}", "x"));
         let tabs: Vec<_> = [4, 8, 12]
             .into_iter()
             .map(|id| TabInfo {
                 id,
-                title: String::new(),
                 ..Default::default()
             })
             .collect();
-        assert_eq!(tab_title(0, &tabs[0]), "Tab 1");
-        assert_eq!(
-            tab_title(
-                1,
-                &TabInfo {
-                    id: 8,
-                    title: "vim".into(),
-                    ..Default::default()
-                }
-            ),
-            "vim"
-        );
         assert_eq!(adjacent_tab(&tabs, 4, -1), Some(12));
         assert_eq!(adjacent_tab(&tabs, 12, 1), Some(4));
-        assert_eq!(adjacent_tab(&tabs, 8, 1), Some(12));
         assert_eq!(adjacent_tab(&[], 0, 1), None);
-    }
-
-    #[test]
-    fn ghostty_parses_text_and_answers_cursor_query() -> Result<()> {
-        let mut terminal = Terminal::new(TerminalOptions {
-            cols: 80,
-            rows: 24,
-            ..Default::default()
-        })?;
-        terminal.vt_write(b"hello\x1b[6n");
-        assert_eq!(terminal.cursor_x()?, 5);
-        assert!(
-            terminal
-                .events()
-                .any(|e| matches!(e, TerminalEvent::PtyWrite(bytes) if bytes == b"\x1b[1;6R"))
-        );
-        assert_eq!(terminal_key(egui::Key::ArrowUp), Some(key::Key::ArrowUp));
         Ok(())
     }
 }

@@ -10,4 +10,5 @@ anyhow.workspace = true
 fontdb = "0.23"
 ghostty-vt.workspace = true
 scytty-common.workspace = true
-eframe = { version = "0.37", default-features = false, features = ["glow", "clipboard", "wayland", "x11", "persistence"] }
+gpui = { version = "0.2.2", features = ["runtime_shaders"] }
+image = { version = "0.25", default-features = false }
