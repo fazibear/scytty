@@ -38,8 +38,12 @@ impl Config {
     pub fn load() -> Result<Self> {
         let base = std::env::var_os("XDG_CONFIG_HOME")
             .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
-            .context("HOME or XDG_CONFIG_HOME must be set")?;
+            .or_else(|| {
+                std::env::var_os("HOME")
+                    .or_else(|| std::env::var_os("USERPROFILE"))
+                    .map(|home| PathBuf::from(home).join(".config"))
+            })
+            .context("HOME, USERPROFILE or XDG_CONFIG_HOME must be set")?;
         let path = base.join("scytty/config.lua");
         match std::fs::read_to_string(&path) {
             Ok(source) => Self::parse_at(&source, path.parent())

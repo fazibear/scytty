@@ -150,7 +150,7 @@ mod tests {
     use super::*;
     #[test]
     fn handshake_then_frames() -> Result<()> {
-        let (mut client, mut server) = std::os::unix::net::UnixStream::pair()?;
+        let (mut client, mut server) = crate::stream::pair()?;
         let peer = std::thread::spawn(move || -> Result<()> {
             handshake(&mut server)?;
             assert!(matches!(receive::<Request>(&mut server)?, Request::NewTab));
@@ -165,7 +165,7 @@ mod tests {
     #[test]
     fn handshake_rejects_mismatch_and_legacy() -> Result<()> {
         for kind in ["version", "magic", "legacy"] {
-            let (mut client, mut server) = std::os::unix::net::UnixStream::pair()?;
+            let (mut client, mut server) = crate::stream::pair()?;
             let peer = std::thread::spawn(move || {
                 let mut hello = [0; 12];
                 server.read_exact(&mut hello).unwrap();

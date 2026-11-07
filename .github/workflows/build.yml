@@ -19,11 +19,15 @@ jobs:
             platform: macos-arm64
           - runner: macos-15-intel
             platform: macos-x86_64
+          - runner: windows-latest
+            platform: windows-x86_64
           - runner: ubuntu-22.04
             platform: linux-x86_64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
       - uses: dtolnay/rust-toolchain@stable
       - uses: mlugg/setup-zig@v2
         with:
@@ -42,7 +46,21 @@ jobs:
           cargo test --locked -p scytty-server -p scytty-common
           cargo build --locked --release -p scytty-server
 
+      - name: Build and test Windows GUI
+        if: runner.os == 'Windows'
+        run: |
+          cargo test --locked -p scytty -p scytty-common
+          cargo build --locked --release -p scytty
+
+      - name: Package Windows GUI
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          mkdir -p dist
+          tar -czf dist/scytty-desktop-${{ matrix.platform }}.tar.gz -C target/release scytty.exe
+
       - name: Package server
+        if: runner.os != 'Windows'
         run: |
           mkdir -p dist
           tar -czf dist/scytty-server-${{ matrix.platform }}.tar.gz -C target/release scytty-server

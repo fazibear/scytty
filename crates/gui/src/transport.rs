@@ -1,13 +1,14 @@
 use anyhow::{Context, Result, bail};
 use std::{
     io,
-    os::unix::net::UnixStream,
     process::{Child, Command, Stdio},
     thread,
 };
 
+use scytty_common::stream::{self, Stream};
+
 pub struct Connection {
-    pub socket: UnixStream,
+    pub socket: Stream,
     child: Child,
 }
 impl Drop for Connection {
@@ -33,6 +34,12 @@ pub fn connect(host: &str) -> Result<Connection> {
     bridge(command)
 }
 
+#[cfg(windows)]
+pub fn connect_local() -> Result<Connection> {
+    bail!("local sessions are not supported on Windows; use scytty --ssh user@host [session]")
+}
+
+#[cfg(unix)]
 pub fn connect_local() -> Result<Connection> {
     let mut command = Command::new(scytty_common::connection::server_executable()?);
     command.arg("--stdio");
@@ -40,7 +47,7 @@ pub fn connect_local() -> Result<Connection> {
 }
 
 fn bridge(mut command: Command) -> Result<Connection> {
-    let (socket, mut bridge) = UnixStream::pair()?;
+    let (socket, mut bridge) = stream::pair()?;
     let mut outgoing = bridge.try_clone()?;
     let mut child = command
         .stdin(Stdio::piped())
@@ -74,6 +81,7 @@ fn validate_host(host: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     #[test]
     fn stdio_bridge_roundtrip() -> Result<()> {
         use std::io::{Read, Write};

@@ -2,11 +2,30 @@ set positional-arguments
 
 # Build both binaries so the GUI can start its matching local server.
 build:
+    #!/usr/bin/env bash
+    set -euo pipefail
     cargo build --release -p scytty -p scytty-server
+    if [[ "$(uname -s)" == Darwin ]]; then
+        app=target/release/Scytty.app
+        mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+        cp target/release/scytty target/release/scytty-server "$app/Contents/MacOS/"
+        cp assets/scytty.icns "$app/Contents/Resources/"
+        version=$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "scytty"))')
+        python3 -c 'import plistlib,sys; plistlib.dump(dict(CFBundleName="Scytty", CFBundleDisplayName="Scytty", CFBundleIdentifier="app.scytty.terminal", CFBundleExecutable="scytty", CFBundleIconFile="scytty.icns", CFBundlePackageType="APPL", CFBundleShortVersionString=sys.argv[2], CFBundleVersion=sys.argv[2], NSHighResolutionCapable=True), open(sys.argv[1], "wb"))' "$app/Contents/Info.plist" "$version"
+        plutil -lint "$app/Contents/Info.plist"
+        codesign --force --sign - "$app/Contents/MacOS/scytty-server"
+        codesign --force --sign - "$app"
+    fi
 
 # Example: just run --ssh 192.168.1.2 work
 run *args: build
-    ./target/release/scytty "$@"
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ "$(uname -s)" == Darwin ]]; then
+        open -n -W target/release/Scytty.app --args "$@"
+    else
+        exec ./target/release/scytty "$@"
+    fi
 
 build-server:
     cargo build --release -p scytty-server

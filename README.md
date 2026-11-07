@@ -51,7 +51,7 @@ Install and select a Nerd Font to display the status bar's icons.
 ## Just commands
 
 ```sh
-just build          # release GUI + matching local server
+just build          # release GUI + matching local server; macOS also creates target/release/Scytty.app
 just run            # build and launch GUI; accepts session / --ssh arguments
 just build-server   # native release server only
 just build-linux    # Linux x86_64 server, using Zig (glibc 2.28+)
@@ -70,11 +70,17 @@ succeed, it creates a GitHub Release for that tag with downloadable archives:
 
 - macOS ARM64 and x86_64: desktop `.app` bundle plus standalone server archives.
 - Linux x86_64: standalone server archive (built on Ubuntu 22.04).
+- Windows x86_64: GUI executable archive (SSH sessions only; no local server).
 
 Extract the desktop archive and move `Scytty.app` into Applications. Its matching
 server is bundled inside, so no separate server installation is needed locally.
 The app is ad-hoc signed, **not notarized**; macOS Gatekeeper may block it until
 explicitly allowed in System Settings.
+
+On Windows, extract the desktop archive and run
+`scytty.exe --ssh user@host [session]`. OpenSSH (`ssh.exe`) must be on PATH,
+and `scytty-server` must be installed on the remote Unix host. To build locally,
+use `cargo build --release -p scytty` with Rust, Zig and the MSVC build tools.
 
 Publish a release with `git tag v0.1.0 && git push origin v0.1.0` (use a new tag
 for each release).

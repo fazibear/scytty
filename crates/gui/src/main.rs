@@ -14,7 +14,8 @@ mod images;
 mod transport;
 use config::Config;
 use scytty_common::protocol::{self, Request, TabInfo, Update};
-use std::{collections::HashMap, os::unix::net::UnixStream};
+use scytty_common::stream::Stream;
+use std::collections::HashMap;
 use std::{
     sync::mpsc::{self, Receiver},
     thread,
@@ -26,7 +27,7 @@ struct App {
     images: images::Images,
     last_frame: Vec<egui::epaint::ClippedShape>,
     render_hold_since: Option<std::time::Instant>,
-    writer: UnixStream,
+    writer: Stream,
     id: u64,
     size: (u16, u16, u32, u32),
     encoder: key::Encoder,
@@ -35,7 +36,7 @@ struct App {
 }
 
 impl App {
-    fn new(writer: UnixStream, id: u64, mut terminal: Terminal) -> Result<Self> {
+    fn new(writer: Stream, id: u64, mut terminal: Terminal) -> Result<Self> {
         scytty_common::images::configure(&mut terminal)?;
         let render = RenderState::new()?;
         let encoder = key::Encoder::new()?;
@@ -412,7 +413,7 @@ struct Window {
     config: Config,
     _connection: transport::Connection,
     remote: bool,
-    writer: UnixStream,
+    writer: Stream,
     updates: Receiver<Result<Update>>,
     tabs: HashMap<u64, App>,
     order: Vec<TabInfo>,
@@ -588,7 +589,7 @@ impl Window {
         ui.spacing_mut().item_spacing.y = 0.0;
         let (bar_rect, header) = ui.allocate_exact_size(
             egui::vec2(ui.available_width(), bar_height),
-            egui::Sense::drag(),
+            egui::Sense::DRAG,
         );
         if header.drag_started() {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
@@ -631,7 +632,7 @@ impl Window {
                         .collect();
                     let (rect, response) = ui.allocate_exact_size(
                         egui::vec2(chars.len() as f32 * cell, bar_height),
-                        egui::Sense::click(),
+                        egui::Sense::CLICK,
                     );
                     let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
                     for (index, (text, color)) in chars.iter().enumerate() {
@@ -792,10 +793,17 @@ fn main() -> eframe::Result {
     } else {
         (None, argument.unwrap_or_else(|| "default".into()))
     };
+    let viewport = egui::ViewportBuilder::default();
+    // Keep the macOS bundle icon instead of eframe's default runtime icon.
+    #[cfg(target_os = "macos")]
+    let viewport = viewport
+        .with_icon(egui::IconData::default())
+        // Native shadows darken transparent content differently when focus changes.
+        .with_has_shadow(false);
     eframe::run_native(
         "scytty",
         eframe::NativeOptions {
-            viewport: egui::ViewportBuilder::default()
+            viewport: viewport
                 .with_inner_size([config.window_width, config.window_height])
                 .with_transparent(true)
                 .with_fullsize_content_view(true)
