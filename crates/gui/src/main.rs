@@ -589,8 +589,11 @@ impl Window {
         ui.spacing_mut().item_spacing.y = 0.0;
         let (bar_rect, header) = ui.allocate_exact_size(
             egui::vec2(ui.available_width(), bar_height),
-            egui::Sense::DRAG,
+            egui::Sense::CLICK | egui::Sense::DRAG,
         );
+        if cfg!(target_os = "windows") && header.double_clicked() {
+            toggle_maximized(ui.ctx());
+        }
         if header.drag_started() {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
         }
@@ -599,6 +602,10 @@ impl Window {
             (content_rect.max.x - 8.0 / ui.ctx().zoom_factor()).max(content_rect.min.x);
         if cfg!(target_os = "macos") {
             content_rect.min.x = (content_rect.min.x + button_width).min(content_rect.max.x);
+        } else if cfg!(target_os = "windows") {
+            let controls = windows_controls_rect(bar_rect, ui.ctx().zoom_factor());
+            content_rect.max.x = controls.left().max(content_rect.min.x);
+            windows_controls(ui, controls);
         }
         let mut bar = ui.new_child(
             egui::UiBuilder::new()
@@ -692,6 +699,92 @@ impl Window {
     }
 }
 
+fn windows_resize_edges(ui: &mut egui::Ui) {
+    if ui.input(|input| input.viewport().maximized.unwrap_or(false)) {
+        return;
+    }
+    use egui::{CursorIcon as C, ResizeDirection as D};
+    let r = ui.max_rect();
+    let edge = 5.0 / ui.ctx().zoom_factor();
+    let x = [r.left(), r.left() + edge, r.right() - edge, r.right()];
+    let y = [r.top(), r.top() + edge, r.bottom() - edge, r.bottom()];
+    for (col, row, direction, cursor) in [
+        (0, 0, D::NorthWest, C::ResizeNwSe),
+        (1, 0, D::North, C::ResizeVertical),
+        (2, 0, D::NorthEast, C::ResizeNeSw),
+        (0, 1, D::West, C::ResizeHorizontal),
+        (2, 1, D::East, C::ResizeHorizontal),
+        (0, 2, D::SouthWest, C::ResizeNeSw),
+        (1, 2, D::South, C::ResizeVertical),
+        (2, 2, D::SouthEast, C::ResizeNwSe),
+    ] {
+        let rect = Rect::from_min_max(
+            egui::pos2(x[col], y[row]),
+            egui::pos2(x[col + 1], y[row + 1]),
+        );
+        let response = ui
+            .interact(
+                rect,
+                ui.scope_id().with(("resize", col, row)),
+                egui::Sense::DRAG,
+            )
+            .on_hover_cursor(cursor);
+        if response.drag_started() {
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::BeginResize(direction));
+        }
+    }
+}
+
+fn toggle_maximized(ctx: &egui::Context) {
+    let maximized = ctx.input(|input| input.viewport().maximized.unwrap_or(false));
+    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+}
+
+fn windows_controls_rect(bar: Rect, zoom: f32) -> Rect {
+    Rect::from_min_max(
+        egui::pos2((bar.right() - 138.0 / zoom).max(bar.left()), bar.top()),
+        bar.max,
+    )
+}
+
+// shortcut: custom controls lack Windows' hover snap menu; use native hit-testing if needed.
+fn windows_controls(ui: &mut egui::Ui, rect: Rect) {
+    let maximized = ui.input(|input| input.viewport().maximized.unwrap_or(false));
+    let controls = [
+        ("−", "Minimize"),
+        (
+            if maximized { "❐" } else { "□" },
+            if maximized { "Restore" } else { "Maximize" },
+        ),
+        ("×", "Close"),
+    ];
+    for (index, (symbol, name)) in controls.into_iter().enumerate() {
+        let button_rect = Rect::from_min_size(
+            egui::pos2(rect.left() + rect.width() * index as f32 / 3.0, rect.top()),
+            egui::vec2(rect.width() / 3.0, rect.height()),
+        );
+        let response = ui
+            .put(
+                button_rect,
+                egui::Button::new(symbol)
+                    .sense(egui::Sense::CLICK)
+                    .frame(false),
+            )
+            .on_hover_text(name);
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name));
+        if response.clicked() {
+            match index {
+                0 => ui
+                    .ctx()
+                    .send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
+                1 => toggle_maximized(ui.ctx()),
+                _ => ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close),
+            }
+        }
+    }
+}
+
 fn titlebar_size(zoom: f32) -> (f32, f32) {
     (78.0 / zoom, 32.0 / zoom)
 }
@@ -728,9 +821,14 @@ impl eframe::App for Window {
             show_error(ui, error);
             return;
         }
+        let window_rect = ui.max_rect();
         if let Err(e) = self.draw(ui) {
             eprintln!("Terminal error: {e:#}");
             self.error = Some(format!("Terminal error: {e:#}"));
+        }
+        if cfg!(target_os = "windows") {
+            let mut overlay = ui.new_child(egui::UiBuilder::new().max_rect(window_rect));
+            windows_resize_edges(&mut overlay);
         }
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(100));
@@ -800,6 +898,8 @@ fn main() -> eframe::Result {
         .with_icon(egui::IconData::default())
         // Native shadows darken transparent content differently when focus changes.
         .with_has_shadow(false);
+    #[cfg(target_os = "windows")]
+    let viewport = viewport.with_decorations(false);
     eframe::run_native(
         "scytty",
         eframe::NativeOptions {
@@ -944,6 +1044,19 @@ mod tests {
             let (width, height) = titlebar_size(zoom);
             assert!((width * zoom - 78.0).abs() < 0.001);
             assert!((height * zoom - 32.0).abs() < 0.001);
+        }
+    }
+
+    #[test]
+    fn windows_controls_stay_on_right_at_any_zoom() {
+        for zoom in [0.5, 1.0, 1.5, 2.0] {
+            let bar = Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(800.0, 32.0 / zoom));
+            let controls = windows_controls_rect(bar, zoom);
+            assert_eq!(controls.right(), bar.right());
+            assert_eq!(controls.height(), bar.height());
+            assert!((controls.width() * zoom - 138.0).abs() < 0.001);
+            let narrow = Rect::from_min_size(bar.min, egui::vec2(50.0, bar.height()));
+            assert_eq!(windows_controls_rect(narrow, zoom), narrow);
         }
     }
 
