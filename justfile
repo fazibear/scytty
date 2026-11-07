@@ -22,7 +22,9 @@ run *args: build
     #!/usr/bin/env bash
     set -euo pipefail
     if [[ "$(uname -s)" == Darwin ]]; then
-        open -n -W target/release/Scytty.app --args "$@"
+        mkdir -p "$HOME/Applications"
+        ditto target/release/Scytty.app "$HOME/Applications/Scytty.app"
+        open -n -W "$HOME/Applications/Scytty.app" --args "$@"
     else
         exec ./target/release/scytty "$@"
     fi

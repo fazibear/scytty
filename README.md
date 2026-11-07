@@ -52,7 +52,7 @@ Install and select a Nerd Font to display the status bar's icons.
 
 ```sh
 just build          # release GUI + matching local server; macOS also creates target/release/Scytty.app
-just run            # build and launch GUI; accepts session / --ssh arguments
+just run            # build and launch GUI (installs to ~/Applications on macOS); accepts session / --ssh arguments
 just build-server   # native release server only
 just build-linux    # Linux x86_64 server, using Zig (glibc 2.28+)
 just install-linux  # cross-build and install to 192.168.1.2:~/.local/bin

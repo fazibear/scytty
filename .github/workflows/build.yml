@@ -26,6 +26,19 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
+      # Avoid the tarball host's certificate-chain failure on Windows.
+      - uses: actions/checkout@v4
+        if: runner.os == 'Windows'
+        with:
+          repository: ghostty-org/ghostty
+          ref: 83fb95624b0439ee660c2679b43b38c8b63769cd
+          path: .ghostty-source
+          persist-credentials: false
+      - name: Use pinned Ghostty checkout
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          "GHOSTTY_SOURCE_DIR=$env:GITHUB_WORKSPACE/.ghostty-source" >> $env:GITHUB_ENV
       - uses: ilammy/msvc-dev-cmd@v1
         if: runner.os == 'Windows'
       - uses: dtolnay/rust-toolchain@stable
