@@ -1,0 +1,106 @@
+name: Build
+
+on:
+  push:
+    tags:
+      - '*'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            platform: macos-arm64
+          - runner: macos-15-intel
+            platform: macos-x86_64
+          - runner: ubuntu-22.04
+            platform: linux-x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build and test macOS desktop and server
+        if: runner.os == 'macOS'
+        run: |
+          cargo test --locked --workspace
+          cargo build --locked --release --workspace
+
+      - name: Build and test Linux server
+        if: runner.os == 'Linux'
+        run: |
+          cargo test --locked -p scytty-server -p scytty-common
+          cargo build --locked --release -p scytty-server
+
+      - name: Package server
+        run: |
+          mkdir -p dist
+          tar -czf dist/scytty-server-${{ matrix.platform }}.tar.gz -C target/release scytty-server
+
+      - name: Package macOS desktop
+        if: runner.os == 'macOS'
+        run: |
+          app=dist/Scytty.app
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          cp target/release/scytty target/release/scytty-server "$app/Contents/MacOS/"
+          cp assets/scytty.icns "$app/Contents/Resources/"
+          version=$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "scytty"))')
+          python3 - "$app/Contents/Info.plist" "$version" <<'PY'
+          import plistlib
+          import sys
+          with open(sys.argv[1], 'wb') as output:
+              plistlib.dump({
+                  'CFBundleName': 'Scytty',
+                  'CFBundleDisplayName': 'Scytty',
+                  'CFBundleIdentifier': 'app.scytty.terminal',
+                  'CFBundleExecutable': 'scytty',
+                  'CFBundleIconFile': 'scytty.icns',
+                  'CFBundlePackageType': 'APPL',
+                  'CFBundleShortVersionString': sys.argv[2],
+                  'CFBundleVersion': sys.argv[2],
+                  'NSHighResolutionCapable': True,
+              }, output)
+          PY
+          plutil -lint "$app/Contents/Info.plist"
+          test -x "$app/Contents/MacOS/scytty"
+          test -x "$app/Contents/MacOS/scytty-server"
+          codesign --force --sign - "$app/Contents/MacOS/scytty-server"
+          codesign --force --sign - "$app"
+          codesign --verify --deep --strict "$app"
+          tar -czf dist/scytty-desktop-${{ matrix.platform }}.tar.gz -C dist Scytty.app
+          rm -rf "$app"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: scytty-${{ matrix.platform }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: scytty-*
+          path: dist
+          merge-multiple: true
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" dist/*.tar.gz --verify-tag --title "$TAG" --generate-notes

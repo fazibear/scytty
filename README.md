@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.png" width="320" alt="scytty hooded reaper and terminal logo">
+</p>
+
 # scytty
 
 A minimal native terminal in Rust: egui/eframe draws the window,
@@ -58,6 +62,22 @@ Linux builds require `zig` on PATH and
 `rustup target add x86_64-unknown-linux-gnu`. Installation uses your system
 SSH credentials and atomically replaces the binary without restarting the
 remote daemon. Restart it separately when safe; restarting ends its sessions.
+
+## GitHub Actions builds
+
+The `Build` workflow runs only when a tag is pushed. After all builds and tests
+succeed, it creates a GitHub Release for that tag with downloadable archives:
+
+- macOS ARM64 and x86_64: desktop `.app` bundle plus standalone server archives.
+- Linux x86_64: standalone server archive (built on Ubuntu 22.04).
+
+Extract the desktop archive and move `Scytty.app` into Applications. Its matching
+server is bundled inside, so no separate server installation is needed locally.
+The app is ad-hoc signed, **not notarized**; macOS Gatekeeper may block it until
+explicitly allowed in System Settings.
+
+Publish a release with `git tag v0.1.0 && git push origin v0.1.0` (use a new tag
+for each release).
 
 ## Configuration
 
