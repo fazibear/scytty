@@ -22,6 +22,7 @@ mod ansi;
 mod config;
 mod fonts;
 mod images;
+mod scrollbar;
 mod transport;
 mod window_state;
 use config::Config;
@@ -146,6 +147,9 @@ struct Gui {
     initial_font_size: f32,
     session: String,
     remote: bool,
+    host: Option<String>,
+    plus_menu_position: Option<gpui::Point<Pixels>>,
+    plus_menu_selected: usize,
     connection: Option<transport::Connection>,
     writer: Option<Stream>,
     updates: Option<Receiver<Result<Update>>>,
@@ -161,6 +165,10 @@ struct Gui {
     marked: String,
     marked_selection: Range<usize>,
     scroll_remainder: f32,
+    scroll_drag: Option<(u64, Pixels)>,
+    scrollbar_last_used: Instant,
+    scrollbar_position: Option<(u64, u64)>,
+    scrollbar_hovered: bool,
 }
 impl Gui {
     fn new(
@@ -177,6 +185,9 @@ impl Gui {
             config,
             session,
             remote: host.is_some(),
+            host: host.clone(),
+            plus_menu_position: None,
+            plus_menu_selected: 0,
             connection: None,
             writer: None,
             updates: None,
@@ -192,6 +203,10 @@ impl Gui {
             marked: String::new(),
             marked_selection: 0..0,
             scroll_remainder: 0.,
+            scroll_drag: None,
+            scrollbar_last_used: Instant::now(),
+            scrollbar_position: None,
+            scrollbar_hovered: false,
         };
         if view.error.is_none()
             && let Err(e) = view.connect(host)
@@ -382,6 +397,31 @@ impl Gui {
     }
     fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let stroke = &event.keystroke;
+        if self.plus_menu_position.is_some() {
+            match stroke.key.as_str() {
+                "escape" => self.plus_menu_position = None,
+                "down" => {
+                    self.plus_menu_selected =
+                        (self.plus_menu_selected + 1) % self.config.plus_menu.len()
+                }
+                "up" => {
+                    self.plus_menu_selected =
+                        (self.plus_menu_selected + self.config.plus_menu.len() - 1)
+                            % self.config.plus_menu.len()
+                }
+                "enter" => {
+                    let action = self.config.plus_menu[self.plus_menu_selected]
+                        .action
+                        .clone();
+                    let result = self.menu_action(&action, cx);
+                    self.report(result, cx);
+                }
+                _ => {}
+            }
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
         let m = stroke.modifiers;
         let command = if cfg!(target_os = "macos") {
             m.platform
@@ -481,6 +521,15 @@ impl Gui {
         self.focus.focus(window);
         let result = (|| -> Result<()> {
             if let Some(tab) = self.tabs.get_mut(&self.active) {
+                let bar = scrollbar::ScrollBar::new(self.bounds, tab.terminal.scrollbar()?);
+                if bar.track.contains(&event.position) {
+                    let grab = bar.grab_offset(event.position);
+                    self.scroll_drag = Some((self.active, grab));
+                    self.scrollbar_last_used = Instant::now();
+                    tab.terminal
+                        .scroll_viewport(ScrollViewport::Row(bar.row(event.position.y, grab)));
+                    return Ok(());
+                }
                 tab.terminal.set_selection(None)?;
                 tab.anchor = Some(tab.terminal.track_grid_ref(selection_point(
                     event.position,
@@ -495,10 +544,28 @@ impl Gui {
         self.report(result, cx);
     }
     fn mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        let hovered = self.bounds.contains(&event.position)
+            && event.position.x >= self.bounds.right() - px(scrollbar::WIDTH);
+        if hovered || hovered != self.scrollbar_hovered {
+            self.scrollbar_last_used = Instant::now();
+            cx.notify();
+        }
+        self.scrollbar_hovered = hovered;
         if event.pressed_button != Some(MouseButton::Left) {
+            self.scroll_drag = None;
             return;
         }
         let result = (|| -> Result<()> {
+            if let Some((id, grab)) = self.scroll_drag {
+                if id == self.active
+                    && let Some(tab) = self.tabs.get_mut(&id)
+                {
+                    let bar = scrollbar::ScrollBar::new(self.bounds, tab.terminal.scrollbar()?);
+                    tab.terminal
+                        .scroll_viewport(ScrollViewport::Row(bar.row(event.position.y, grab)));
+                }
+                return Ok(());
+            }
             if let Some(tab) = self.tabs.get_mut(&self.active)
                 && let Some(anchor) = &tab.anchor
                 && let Some(start) = anchor.snapshot(&tab.terminal)?
@@ -519,6 +586,7 @@ impl Gui {
     }
     fn scroll(&mut self, event: &ScrollWheelEvent, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(tab) = self.tabs.get_mut(&self.active) {
+            self.scrollbar_last_used = Instant::now();
             let delta = event.delta.pixel_delta(self.cell.height);
             tab.terminal
                 .scroll_viewport(ScrollViewport::Delta(scroll_rows(
@@ -535,6 +603,13 @@ impl Gui {
         cx: &mut Context<Self>,
     ) -> Result<()> {
         self.bounds = bounds;
+        let bounds = Bounds::new(
+            bounds.origin,
+            size(
+                (bounds.size.width - px(scrollbar::RESERVED_WIDTH)).max(px(1.)),
+                bounds.size.height,
+            ),
+        );
         window.handle_input(
             &self.focus,
             ElementInputHandler::new(bounds, cx.entity()),
@@ -680,7 +755,22 @@ impl Gui {
                     )?;
             }
             Ok(())
-        })
+        })?;
+        let scroll = tab.terminal.scrollbar()?;
+        let position = (self.active, scroll.offset);
+        if self.scrollbar_position != Some(position)
+            || self.scroll_drag.is_some()
+            || self.scrollbar_hovered
+        {
+            self.scrollbar_position = Some(position);
+            self.scrollbar_last_used = Instant::now();
+        }
+        let opacity = scrollbar::opacity(self.scrollbar_last_used.elapsed());
+        if cfg!(target_os = "macos") && scroll.total > scroll.len && opacity > 0. {
+            window.request_animation_frame();
+        }
+        scrollbar::ScrollBar::new(self.bounds, scroll).paint(window, opacity);
+        Ok(())
     }
     fn segments(
         &self,
@@ -713,6 +803,93 @@ impl Gui {
         }
         Ok(line)
     }
+    fn menu_action(&mut self, action: &config::MenuAction, cx: &mut Context<Self>) -> Result<()> {
+        self.plus_menu_position = None;
+        match action {
+            config::MenuAction::NewTab => self.request(Request::NewTab),
+            config::MenuAction::NewWindow => {
+                let session = format!(
+                    "window-{}-{}",
+                    std::process::id(),
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)?
+                        .as_nanos()
+                );
+                open_window(Config::load()?, session, self.host.clone(), cx)
+            }
+            config::MenuAction::Connect { host, session } => {
+                open_window(Config::load()?, session.clone(), Some(host.clone()), cx)
+            }
+        }
+    }
+    fn plus_menu(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let position = self.plus_menu_position?;
+        let width = px(240.).min(window.viewport_size().width);
+        let row_height = px(self.config.font_size * 1.5 + 8.);
+        let height = (row_height * self.config.plus_menu.len() as f32 + px(8.))
+            .min(window.viewport_size().height);
+        let mut menu = div()
+            .id("plus-menu")
+            .absolute()
+            .left(
+                position
+                    .x
+                    .min((window.viewport_size().width - width).max(px(0.))),
+            )
+            .top(
+                position
+                    .y
+                    .min((window.viewport_size().height - height).max(px(0.))),
+            )
+            .w(width)
+            .max_h(height)
+            .overflow_y_scroll()
+            .p(px(4.))
+            .bg(rgb(0x252525))
+            .border_1()
+            .border_color(rgb(0x555555))
+            .rounded(px(6.))
+            .occlude()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+            .on_mouse_down_out(cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                if event.button == MouseButton::Left {
+                    this.plus_menu_position = None;
+                    cx.notify();
+                }
+            }));
+        for (index, entry) in self.config.plus_menu.iter().enumerate() {
+            let action = entry.action.clone();
+            menu = menu.child(
+                div()
+                    .id(("plus-menu-item", index))
+                    .h(row_height)
+                    .px(px(8.))
+                    .line_height(row_height)
+                    .overflow_hidden()
+                    .cursor_pointer()
+                    .rounded(px(3.))
+                    .bg(if index == self.plus_menu_selected {
+                        rgb(0x3b4d70)
+                    } else {
+                        rgb(0x252525)
+                    })
+                    .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                        if *hovered {
+                            this.plus_menu_selected = index;
+                            cx.notify();
+                        }
+                    }))
+                    .child(entry.label.clone())
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        let result = this.menu_action(&action, cx);
+                        this.focus.focus(window);
+                        this.report(result, cx);
+                    })),
+            );
+        }
+        Some(menu.into_any_element())
+    }
     fn header(&self, cx: &mut Context<Self>) -> Result<AnyElement> {
         let active = self.order.iter().find(|t| t.id == self.active);
         let mut bar = div()
@@ -721,7 +898,7 @@ impl Gui {
             .items_center()
             .h(px(32.))
             .line_height(px(28.))
-            .pt(px(3.))
+            .pt(px(3.5))
             .flex_shrink_0()
             .overflow_hidden()
             .on_mouse_down(MouseButton::Left, |event, window, _| {
@@ -766,6 +943,19 @@ impl Gui {
         bar = bar.child(tabs).child(
             div()
                 .id("new-tab")
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                        this.plus_menu_selected = 0;
+                        this.plus_menu_position = if this.config.plus_menu.is_empty() {
+                            None
+                        } else {
+                            Some(event.position)
+                        };
+                        cx.stop_propagation();
+                        cx.notify();
+                    }),
+                )
                 .flex_shrink_0()
                 .px(px(8.))
                 .cursor_pointer()
@@ -812,6 +1002,15 @@ impl Render for Gui {
             self.error = Some(format!("{e:#}"));
         }
         let mut root = div()
+            .relative()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    if this.plus_menu_position.take().is_some() {
+                        cx.notify();
+                    }
+                }),
+            )
             .size_full()
             .flex()
             .flex_col()
@@ -860,6 +1059,7 @@ impl Render for Gui {
             );
         }
         let entity = cx.entity();
+        let menu = self.plus_menu(window, cx);
         root.child(
             div()
                 .id("terminal")
@@ -867,7 +1067,22 @@ impl Render for Gui {
                 .overflow_hidden()
                 .cursor(CursorStyle::IBeam)
                 .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
+                .on_mouse_up(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, _| this.scroll_drag = None),
+                )
+                .on_mouse_up_out(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, _| this.scroll_drag = None),
+                )
                 .on_mouse_move(cx.listener(Self::mouse_move))
+                .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                    if !hovered && this.scrollbar_hovered {
+                        this.scrollbar_hovered = false;
+                        this.scrollbar_last_used = Instant::now();
+                        cx.notify();
+                    }
+                }))
                 .on_scroll_wheel(cx.listener(Self::scroll))
                 .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
                     let paths: Vec<_> = paths.paths().iter().map(|p| p.as_path()).collect();
@@ -890,6 +1105,7 @@ impl Render for Gui {
                     .size_full(),
                 ),
         )
+        .children(menu)
     }
 }
 impl EntityInputHandler for Gui {
@@ -1160,6 +1376,35 @@ fn terminal_key(k: &str) -> Option<key::Key> {
         _ => return None,
     })
 }
+fn open_window(
+    config: Config,
+    session: String,
+    host: Option<String>,
+    cx: &mut gpui::App,
+) -> Result<()> {
+    let window_size = size(px(config.window_width), px(config.window_height));
+    let options = WindowOptions {
+        window_bounds: Some(
+            window_state::load(cx)
+                .unwrap_or_else(|| WindowBounds::Windowed(Bounds::centered(None, window_size, cx))),
+        ),
+        titlebar: Some(TitlebarOptions {
+            title: Some("Scytty".into()),
+            appears_transparent: true,
+            traffic_light_position: Some(point(px(12.), px(10.))),
+        }),
+        window_background: WindowBackgroundAppearance::Transparent,
+        window_min_size: Some(size(px(200.), px(100.))),
+        ..Default::default()
+    };
+    cx.open_window(options, |window, cx| {
+        let view = cx.new(|cx| Gui::new(config, session, host, cx));
+        view.read(cx).focus.focus(window);
+        view
+    })?;
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let config = Config::load()?;
     let mut args = std::env::args().skip(1);
@@ -1175,26 +1420,8 @@ fn main() -> Result<()> {
     } else {
         (None, argument.unwrap_or_else(|| "default".into()))
     };
-    let window_size = size(px(config.window_width), px(config.window_height));
     Application::new().run(move |cx| {
-        let options = WindowOptions {
-            window_bounds: Some(window_state::load(cx).unwrap_or_else(|| {
-                WindowBounds::Windowed(Bounds::centered(None, window_size, cx))
-            })),
-            titlebar: Some(TitlebarOptions {
-                title: Some("Scytty".into()),
-                appears_transparent: true,
-                traffic_light_position: Some(point(px(12.), px(10.))),
-            }),
-            window_background: WindowBackgroundAppearance::Transparent,
-            window_min_size: Some(size(px(200.), px(100.))),
-            ..Default::default()
-        };
-        if let Err(e) = cx.open_window(options, |window, cx| {
-            let view = cx.new(|cx| Gui::new(config, session, host, cx));
-            view.read(cx).focus.focus(window);
-            view
-        }) {
+        if let Err(e) = open_window(config, session, host, cx) {
             eprintln!("Cannot open Scytty: {e:#}");
             cx.quit();
         }

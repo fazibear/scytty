@@ -68,7 +68,7 @@ fn bridge(mut command: Command) -> Result<Connection> {
     Ok(Connection { socket, child })
 }
 
-fn validate_host(host: &str) -> Result<()> {
+pub(crate) fn validate_host(host: &str) -> Result<()> {
     if host.is_empty()
         || host.starts_with('-')
         || host.chars().any(|c| c.is_whitespace() || c.is_control())

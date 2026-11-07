@@ -2,8 +2,21 @@ use anyhow::{Context, Result, bail};
 use mlua::{Function, Lua, Table, Value};
 use std::path::PathBuf;
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum MenuAction {
+    NewTab,
+    NewWindow,
+    Connect { host: String, session: String },
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct MenuEntry {
+    pub label: String,
+    pub action: MenuAction,
+}
+
 #[derive(Debug)]
 pub struct Config {
+    pub plus_menu: Vec<MenuEntry>,
     pub font_size: f32,
     pub scrollback_mb: u16,
     pub font_family: String,
@@ -22,6 +35,16 @@ impl Default for Config {
             .eval()
             .expect("bundled status Lua");
         Self {
+            plus_menu: vec![
+                MenuEntry {
+                    label: "New tab".into(),
+                    action: MenuAction::NewTab,
+                },
+                MenuEntry {
+                    label: "New window".into(),
+                    action: MenuAction::NewWindow,
+                },
+            ],
             font_size: 16.0,
             scrollback_mb: 16,
             font_family: "monospace".into(),
@@ -149,6 +172,72 @@ impl Config {
         };
         for pair in table.pairs::<String, Value>() {
             let (key, raw) = pair?;
+            if key == "plus_menu" {
+                let Value::Table(entries) = raw else {
+                    bail!("plus_menu must be an array")
+                };
+                let count = entries
+                    .clone()
+                    .pairs::<usize, Table>()
+                    .map(|entry| -> Result<usize> {
+                        let (index, _) = entry?;
+                        if index == 0 || index > entries.raw_len() {
+                            bail!("plus_menu must be a contiguous array");
+                        }
+                        Ok(index)
+                    })
+                    .collect::<Result<Vec<_>>>()?
+                    .len();
+                if count != entries.raw_len() {
+                    bail!("plus_menu must be a contiguous array");
+                }
+                config.plus_menu = entries
+                    .sequence_values::<Table>()
+                    .map(|entry| -> Result<MenuEntry> {
+                        let entry = entry?;
+                        for key in entry.clone().pairs::<String, Value>() {
+                            let (key, _) = key?;
+                            if !matches!(key.as_str(), "label" | "action" | "host" | "session") {
+                                bail!("unknown plus_menu field: {key}");
+                            }
+                        }
+                        let label: String = entry.get("label")?;
+                        if label.trim().is_empty() || label.chars().any(char::is_control) {
+                            bail!("plus_menu label must be nonempty text");
+                        }
+                        let name: String = entry.get("action")?;
+                        let action = match name.as_str() {
+                            "new_tab" | "new_window" => {
+                                if entry.contains_key("host")? || entry.contains_key("session")? {
+                                    bail!("host/session require a connect action");
+                                }
+                                if name == "new_tab" {
+                                    MenuAction::NewTab
+                                } else {
+                                    MenuAction::NewWindow
+                                }
+                            }
+                            "connect" => {
+                                let host: String = entry.get("host")?;
+                                crate::transport::validate_host(&host)?;
+                                let session = entry
+                                    .get::<Option<String>>("session")?
+                                    .unwrap_or_else(|| "default".into());
+                                if session.trim().is_empty()
+                                    || session.len() > 128
+                                    || session.chars().any(char::is_control)
+                                {
+                                    bail!("connect session must be nonempty text");
+                                }
+                                MenuAction::Connect { host, session }
+                            }
+                            _ => bail!("unknown plus_menu action: {name}"),
+                        };
+                        Ok(MenuEntry { label, action })
+                    })
+                    .collect::<Result<_>>()?;
+                continue;
+            }
             if key == "font_family" {
                 let Value::String(value) = raw else {
                     bail!("font_family must be a string")
@@ -201,6 +290,32 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn configurable_plus_menu() -> Result<()> {
+        let config = Config::parse(
+            "return {plus_menu={{label='New',action='new_tab'},{label='Window',action='new_window'},{label='Prod',action='connect',host='user@host',session='work'}}}",
+        )?;
+        assert_eq!(config.plus_menu.len(), 3);
+        assert_eq!(
+            config.plus_menu[2].action,
+            MenuAction::Connect {
+                host: "user@host".into(),
+                session: "work".into()
+            }
+        );
+        assert!(Config::parse("return {plus_menu={}}")?.plus_menu.is_empty());
+        for source in [
+            "return {plus_menu=42}",
+            "return {plus_menu={{label='',action='new_tab'}}}",
+            "return {plus_menu={{label='x',action='oops'}}}",
+            "return {plus_menu={{label='x',action='connect',host='-bad'}}}",
+            "return {plus_menu={{label='x',action='connect'}}}",
+            "return {plus_menu={{label='x',action='new_tab',host='host'}}}",
+        ] {
+            assert!(Config::parse(source).is_err(), "{source}");
+        }
+        Ok(())
+    }
     #[test]
     fn scrollback_configuration() -> Result<()> {
         assert_eq!(Config::default().scrollback_mb, 16);

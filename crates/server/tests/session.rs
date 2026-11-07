@@ -145,6 +145,23 @@ fn tabs_and_reattach() -> Result<()> {
         }
     }
     protocol::send(&mut stream, &Request::SetScrollback { megabytes: 32 })?;
+    let working_dir = dir.join("project's directory");
+    std::fs::create_dir(&working_dir)?;
+    let quoted = working_dir.to_str().unwrap().replace('\'', "'\\''");
+    protocol::send(
+        &mut stream,
+        &Request::Input {
+            id: first,
+            bytes: format!("cd '{quoted}' && printf '\\033]0;cwd-ready\\007'\n").into_bytes(),
+        },
+    )?;
+    loop {
+        if let Update::State { tabs, .. } = protocol::receive(&mut stream)?
+            && tabs.iter().any(|t| t.id == first && t.title == "cwd-ready")
+        {
+            break;
+        }
+    }
     protocol::send(&mut stream, &Request::NewTab)?;
     let (tabs, second) = loop {
         let state = state(&mut stream)?;
@@ -154,6 +171,43 @@ fn tabs_and_reattach() -> Result<()> {
     };
     assert_ne!(first, second);
     assert_session_env(&mut stream, second)?;
+    protocol::send(
+        &mut stream,
+        &Request::Input {
+            id: second,
+            bytes: b"printf '\\033]0;cwd:%s\\007' \"$PWD\"\n".to_vec(),
+        },
+    )?;
+    let expected = working_dir.canonicalize()?;
+    loop {
+        if let Update::State { tabs, .. } = protocol::receive(&mut stream)?
+            && let Some(tab) = tabs
+                .iter()
+                .find(|t| t.id == second && t.title.starts_with("cwd:"))
+        {
+            assert_eq!(
+                std::path::Path::new(tab.title.strip_prefix("cwd:").unwrap()).canonicalize()?,
+                expected
+            );
+            break;
+        }
+    }
+    protocol::send(&mut stream, &Request::NewTab)?;
+    let third = loop {
+        let (tabs, active) = state(&mut stream)?;
+        if tabs.len() == 3 {
+            break active;
+        }
+    };
+    protocol::send(&mut stream, &Request::CloseTab { id: third })?;
+    loop {
+        let (tabs, active) = state(&mut stream)?;
+        if tabs.len() == 2 {
+            assert_eq!(tabs, [first, second]);
+            assert_eq!(active, second);
+            break;
+        }
+    }
     protocol::send(&mut stream, &Request::Activate { id: first })?;
     loop {
         if state(&mut stream)?.1 == first {

@@ -47,6 +47,7 @@ fn copy_flushed(reader: &mut impl Read, writer: &mut impl Write) -> std::io::Res
     }
 }
 
+mod cwd;
 mod user_vars;
 
 struct Tab {
@@ -91,9 +92,12 @@ struct Session {
 }
 impl Session {
     fn close_tab(&mut self, id: u64) {
+        let index = self.tabs.iter().position(|t| t.id == id);
         self.tabs.retain(|t| t.id != id);
         if self.active == id {
-            self.active = self.tabs.first().map_or(0, |t| t.id);
+            self.active = index
+                .and_then(|index| self.tabs.get(index.saturating_sub(1)))
+                .map_or(0, |t| t.id);
         }
         self.state();
     }
@@ -134,7 +138,24 @@ enum Event {
     Output(String, u64, Vec<u8>),
     End(String, u64, Option<String>),
 }
-fn new_tab(session: &str, id: u64, tx: &SyncSender<Event>, scrollback_mb: u16) -> Result<Tab> {
+fn tab_cwd(tab: &Tab) -> Option<std::path::PathBuf> {
+    if tab.exited {
+        return None;
+    }
+    let directory = |pid| cwd::process_cwd(pid).filter(|path| path.is_absolute() && path.is_dir());
+    tab.master
+        .process_group_leader()
+        .and_then(|pid| directory(pid as u32))
+        .or_else(|| tab.child.process_id().and_then(directory))
+}
+
+fn new_tab(
+    session: &str,
+    id: u64,
+    tx: &SyncSender<Event>,
+    scrollback_mb: u16,
+    cwd: Option<&std::path::Path>,
+) -> Result<Tab> {
     let pair = native_pty_system().openpty(PtySize {
         cols: 80,
         rows: 24,
@@ -144,6 +165,9 @@ fn new_tab(session: &str, id: u64, tx: &SyncSender<Event>, scrollback_mb: u16) -
     let mut command =
         CommandBuilder::new(std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()));
     command.arg("-l");
+    if let Some(cwd) = cwd {
+        command.cwd(cwd);
+    }
     command.env("TERM", "xterm-256color");
     command.env("COLORTERM", "truecolor");
     command.env("SCYTTY_SESSION", session);
@@ -309,7 +333,7 @@ pub fn run() -> Result<()> {
             match event {
                 Event::Attach(mut client, name) => {
                     if !sessions.contains_key(&name) {
-                        let tab = new_tab(&name, next_tab, &tx, 16)?;
+                        let tab = new_tab(&name, next_tab, &tx, 16, None)?;
                         next_tab += 1;
                         sessions.insert(
                             name.clone(),
@@ -330,7 +354,7 @@ pub fn run() -> Result<()> {
                         return Ok(());
                     }
                     if session.tabs.is_empty() {
-                        let tab = new_tab(&name, next_tab, &tx, session.scrollback_mb)?;
+                        let tab = new_tab(&name, next_tab, &tx, session.scrollback_mb, None)?;
                         next_tab += 1;
                         session.active = tab.id;
                         session.tabs.push(tab);
@@ -415,7 +439,18 @@ pub fn run() -> Result<()> {
                             session.scrollback_mb = megabytes;
                         }
                         Request::NewTab => {
-                            let tab = new_tab(name, next_tab, &tx, session.scrollback_mb)?;
+                            let cwd = session
+                                .tabs
+                                .iter()
+                                .find(|tab| tab.id == session.active)
+                                .and_then(tab_cwd);
+                            let tab = new_tab(
+                                name,
+                                next_tab,
+                                &tx,
+                                session.scrollback_mb,
+                                cwd.as_deref(),
+                            )?;
                             next_tab += 1;
                             session.emit(snapshot(&tab)?);
                             session.active = tab.id;

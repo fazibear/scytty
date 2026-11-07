@@ -12,3 +12,6 @@ ghostty-vt.workspace = true
 scytty-common.workspace = true
 gpui = { version = "0.2.2", features = ["runtime_shaders"] }
 image = { version = "0.25", default-features = false }
+
+[build-dependencies]
+winresource = { version = "0.1", default-features = false }

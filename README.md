@@ -179,12 +179,34 @@ the daemon when safe (restarting ends existing sessions).
 - **Ctrl+Plus / Ctrl+Minus** (also Cmd on macOS): increase/decrease font size
 - **Ctrl+0** (also Cmd+0 on macOS): reset to the configured font size
 - **Drag**: select terminal text
+- **Scrollbar**: drag the right-hand thumb or click its track to navigate scrollback
 - **Cmd+C / Cmd+V** on macOS, **Ctrl+Shift+C / Ctrl+Shift+V** elsewhere:
   copy selection / paste clipboard (including over SSH)
 - **Cmd+T** (Ctrl+T elsewhere): new tab
 - **Cmd+Left / Cmd+Right** (Ctrl+Left / Ctrl+Right elsewhere): previous/next tab, wrapping at the ends
 
-Tab text and the `+` character also work with the mouse.
+Tab text and the `+` character also work with the mouse. Right-click `+` for a
+menu (Up/Down and Enter select; Escape or an outside click dismisses it).
+Configure entries in `config.lua`:
+
+```lua
+return {
+  plus_menu = {
+    { label = "New tab", action = "new_tab" },
+    { label = "New window", action = "new_window" },
+    { label = "Production", action = "connect", host = "user@server", session = "work" },
+  },
+}
+```
+
+The default menu contains New tab and New window; `plus_menu = {}` disables it.
+New window creates a fresh session on the current host. Connect opens a separate
+window; its session defaults to `default`. An already-attached session still
+requires closing its existing window first.
+
+New tabs inherit the active tab's working directory on the server (local or SSH), using the foreground
+process's directory or the shell's directory as a fallback. If neither can be
+read, the server's launch directory is used.
 
 The GUI runs locally; the server supports macOS and Linux. The default shell
 is `$SHELL`, falling back to `/bin/sh`. Windows is not supported.
