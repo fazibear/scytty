@@ -69,6 +69,13 @@ impl ScrollBar {
     }
 }
 
+pub fn distance_from_bottom(scroll: Scrollbar) -> u64 {
+    scroll
+        .total
+        .saturating_sub(scroll.len)
+        .saturating_sub(scroll.offset)
+}
+
 pub fn opacity(elapsed: std::time::Duration) -> f32 {
     (1. - (elapsed.as_secs_f32() - 0.7) / 0.3).clamp(0., 1.)
 }
@@ -76,6 +83,27 @@ pub fn opacity(elapsed: std::time::Duration) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn output_at_bottom_does_not_count_as_scrolling() {
+        for total in [100, 101, 1000] {
+            assert_eq!(
+                distance_from_bottom(Scrollbar {
+                    total,
+                    len: 24,
+                    offset: total - 24
+                }),
+                0
+            );
+        }
+        assert_eq!(
+            distance_from_bottom(Scrollbar {
+                total: 100,
+                len: 24,
+                offset: 75
+            }),
+            1
+        );
+    }
     #[test]
     fn fades_after_inactivity() {
         use std::time::Duration;

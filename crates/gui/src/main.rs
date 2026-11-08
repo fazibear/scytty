@@ -762,7 +762,7 @@ impl Gui {
             Ok(())
         })?;
         let scroll = tab.terminal.scrollbar()?;
-        let position = (self.active, scroll.offset);
+        let position = (self.active, scrollbar::distance_from_bottom(scroll));
         if self.scrollbar_position != Some(position)
             || self.scroll_drag.is_some()
             || self.scrollbar_hovered
