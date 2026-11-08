@@ -218,6 +218,11 @@ New window creates a fresh session on the current host. Connect opens a separate
 window; its session defaults to `default`. An already-attached session still
 requires closing its existing window first.
 
+Click an HTTP/HTTPS URL or an OSC 8 hyperlink to open it in the system browser.
+Links are underlined on hover and the pointer becomes a hand; dragging still selects text. Other URL
+schemes are not opened. Plain URLs are detected within a visible row; wrapped
+links should use OSC 8.
+
 New tabs inherit the active tab's working directory on the server (local or SSH), using the foreground
 process's directory or the shell's directory as a fallback. If neither can be
 read, the server's launch directory is used.

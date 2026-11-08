@@ -22,6 +22,7 @@ mod ansi;
 mod config;
 mod fonts;
 mod images;
+mod links;
 mod remote;
 mod scrollbar;
 mod transport;
@@ -168,6 +169,8 @@ struct Gui {
     marked_selection: Range<usize>,
     scroll_remainder: f32,
     scroll_drag: Option<(u64, Pixels)>,
+    link_press: Option<(gpui::Point<Pixels>, String)>,
+    link_hovered: Option<gpui::Point<Pixels>>,
     scrollbar_last_used: Instant,
     scrollbar_position: Option<(u64, u64)>,
     scrollbar_hovered: bool,
@@ -207,6 +210,8 @@ impl Gui {
             marked_selection: 0..0,
             scroll_remainder: 0.,
             scroll_drag: None,
+            link_press: None,
+            link_hovered: None,
             scrollbar_last_used: Instant::now(),
             scrollbar_position: None,
             scrollbar_hovered: false,
@@ -522,8 +527,41 @@ impl Gui {
         }
         Ok(None)
     }
+    fn link_at(&self, position: gpui::Point<Pixels>) -> Result<Option<String>> {
+        if !self.bounds.contains(&position)
+            || position.x >= self.bounds.right() - px(scrollbar::WIDTH)
+        {
+            return Ok(None);
+        }
+        let Some(tab) = self.tabs.get(&self.active) else {
+            return Ok(None);
+        };
+        let point = selection_point(
+            position,
+            self.bounds,
+            self.cell,
+            tab.terminal.cols()?,
+            tab.terminal.rows()?,
+        );
+        links::at_terminal(tab, point)
+    }
+    fn mouse_up(&mut self, event: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.scroll_drag = None;
+        if let Some((start, url)) = self.link_press.take()
+            && (event.position.x - start.x).abs() <= px(4.)
+            && (event.position.y - start.y).abs() <= px(4.)
+            && self.link_at(event.position).ok().flatten().as_deref() == Some(url.as_str())
+        {
+            cx.open_url(&url);
+        }
+    }
     fn mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.focus.focus(window);
+        self.link_press = self
+            .link_at(event.position)
+            .ok()
+            .flatten()
+            .map(|url| (event.position, url));
         let result = (|| -> Result<()> {
             if let Some(tab) = self.tabs.get_mut(&self.active) {
                 let bar = scrollbar::ScrollBar::new(self.bounds, tab.terminal.scrollbar()?);
@@ -549,6 +587,21 @@ impl Gui {
         self.report(result, cx);
     }
     fn mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        let link_hovered = self
+            .link_at(event.position)
+            .ok()
+            .flatten()
+            .map(|_| event.position);
+        if link_hovered != self.link_hovered {
+            self.link_hovered = link_hovered;
+            cx.notify();
+        }
+        if self.link_press.as_ref().is_some_and(|(start, _)| {
+            (event.position.x - start.x).abs() > px(4.)
+                || (event.position.y - start.y).abs() > px(4.)
+        }) {
+            self.link_press = None;
+        }
         let hovered = self.bounds.contains(&event.position)
             && event.position.x >= self.bounds.right() - px(scrollbar::WIDTH);
         if hovered || hovered != self.scrollbar_hovered {
@@ -657,6 +710,20 @@ impl Gui {
             window.request_animation_frame();
         }
         tab.snapshot()?;
+        let hovered_cells = if let Some(position) = self.link_hovered {
+            links::hovered_cells(
+                tab,
+                selection_point(
+                    position,
+                    bounds,
+                    cell,
+                    tab.terminal.cols()?,
+                    tab.terminal.rows()?,
+                ),
+            )?
+        } else {
+            0..0
+        };
         let images = tab.images.prepare(&tab.terminal, bounds, cell)?;
         window.with_content_mask(Some(ContentMask { bounds }), |window| -> Result<()> {
             for image in images.iter().filter(|i| i.z < i32::MIN / 2) {
@@ -722,6 +789,19 @@ impl Gui {
                 } else {
                     line.paint(origin, cell.height, window, cx)?;
                 }
+            }
+            for c in &tab.cells[hovered_cells] {
+                window.paint_quad(fill(
+                    Bounds::new(
+                        bounds.origin
+                            + point(
+                                cell.width * c.x as f32,
+                                cell.height * (c.y + 1) as f32 - px(2.),
+                            ),
+                        size(cell.width, px(1.)),
+                    ),
+                    c.fg,
+                ));
             }
             for image in images.iter().filter(|i| i.z >= 0) {
                 image.paint(window)?;
@@ -1091,18 +1171,25 @@ impl Render for Gui {
                 .id("terminal")
                 .flex_1()
                 .overflow_hidden()
-                .cursor(CursorStyle::IBeam)
+                .cursor(if self.link_hovered.is_some() {
+                    CursorStyle::PointingHand
+                } else {
+                    CursorStyle::IBeam
+                })
                 .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
-                .on_mouse_up(
-                    MouseButton::Left,
-                    cx.listener(|this, _, _, _| this.scroll_drag = None),
-                )
+                .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
                 .on_mouse_up_out(
                     MouseButton::Left,
-                    cx.listener(|this, _, _, _| this.scroll_drag = None),
+                    cx.listener(|this, _, _, _| {
+                        this.scroll_drag = None;
+                        this.link_press = None;
+                    }),
                 )
                 .on_mouse_move(cx.listener(Self::mouse_move))
                 .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                    if !hovered && this.link_hovered.take().is_some() {
+                        cx.notify();
+                    }
                     if !hovered && this.scrollbar_hovered {
                         this.scrollbar_hovered = false;
                         this.scrollbar_last_used = Instant::now();
@@ -1517,6 +1604,38 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn application_cursor_visibility_and_restore() -> Result<()> {
+        let mut tab = Tab::new(Terminal::new(TerminalOptions::default())?)?;
+        for bytes in [b"\x1b[?25l".as_slice(), b"text", b"\x1b[?1049h"] {
+            tab.terminal.vt_write(bytes);
+            tab.snapshot()?;
+            assert!(tab.cursor.is_none());
+        }
+        tab.terminal.vt_write(b"\x1b[?1049l\x1b[?25h");
+        for _ in 0..3 {
+            tab.snapshot()?;
+            assert!(tab.cursor.is_some());
+        }
+        tab.terminal.vt_write(b"\x1b[H\x1b[?25l\x1b[7m \x1b[0m");
+        tab.snapshot()?;
+        assert!(tab.cursor.is_none());
+        assert!(
+            tab.cells[0].bg.is_some(),
+            "software cursor on a blank cell must retain its background"
+        );
+        for visible in [false, true] {
+            tab.terminal
+                .vt_write(if visible { b"\x1b[?25h" } else { b"\x1b[?25l" });
+            let mut bytes = Vec::new();
+            ghostty_vt::snapshot::encode_to(&tab.terminal, &mut bytes)?;
+            let terminal = ghostty_vt::snapshot::Decoder::from_slice(&bytes).decode()?;
+            let mut restored = Tab::new(terminal)?;
+            restored.snapshot()?;
+            assert_eq!(restored.cursor.is_some(), visible);
+        }
+        Ok(())
+    }
     #[test]
     fn selection_and_snapshot() -> Result<()> {
         let mut terminal = Terminal::new(TerminalOptions {
