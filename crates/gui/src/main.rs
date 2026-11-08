@@ -22,6 +22,7 @@ mod ansi;
 mod config;
 mod fonts;
 mod images;
+mod remote;
 mod scrollbar;
 mod transport;
 mod window_state;
@@ -159,6 +160,7 @@ struct Gui {
     order: Vec<TabInfo>,
     active: u64,
     error: Option<String>,
+    remote_restart: Option<remote::RestartRequired>,
     focus: FocusHandle,
     bounds: Bounds<Pixels>,
     cell: Size<Pixels>,
@@ -197,6 +199,7 @@ impl Gui {
             order: vec![],
             active: 0,
             error,
+            remote_restart: None,
             focus: cx.focus_handle(),
             bounds: Bounds::default(),
             cell: size(px(8.), px(20.)),
@@ -211,6 +214,7 @@ impl Gui {
         if view.error.is_none()
             && let Err(e) = view.connect(host)
         {
+            view.remote_restart = e.downcast_ref::<remote::RestartRequired>().cloned();
             view.error = Some(format!("{e:#}"));
         }
         cx.spawn(async move |view, cx| {
@@ -325,6 +329,7 @@ impl Gui {
     }
     fn report(&mut self, result: Result<()>, cx: &mut Context<Self>) {
         if let Err(e) = result {
+            self.remote_restart = e.downcast_ref::<remote::RestartRequired>().cloned();
             self.error = Some(format!("{e:#}"));
         }
         cx.notify();
@@ -1033,6 +1038,27 @@ impl Render for Gui {
                 div()
                     .p(px(24.))
                     .child(error.clone())
+                    .children(self.remote_restart.as_ref().map(|_| {
+                        div()
+                            .id("restart-remote-daemon")
+                            .mt(px(16.))
+                            .p(px(8.))
+                            .bg(rgb(0x803030))
+                            .cursor_pointer()
+                            .child("Restart with bundled server — ends ALL remote sessions")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                let Some(warning) = this.remote_restart.take() else {
+                                    return;
+                                };
+                                let result = warning
+                                    .restart()
+                                    .and_then(|_| this.connect(this.host.clone()));
+                                if result.is_ok() {
+                                    this.error = None;
+                                }
+                                this.report(result, cx);
+                            }))
+                    }))
                     .child(
                         div()
                             .id("copy-error")

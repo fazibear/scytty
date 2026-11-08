@@ -20,18 +20,7 @@ impl Drop for Connection {
 }
 
 pub fn connect(host: &str) -> Result<Connection> {
-    validate_host(host)?;
-    let mut command = Command::new("ssh");
-    command.args([
-        "-T",
-        "-o",
-        "ServerAliveInterval=15",
-        "-o",
-        "ServerAliveCountMax=3",
-        host,
-        "scytty-server --stdio",
-    ]);
-    bridge(command)
+    bridge(crate::remote::command(host)?)
 }
 
 #[cfg(windows)]
@@ -46,7 +35,7 @@ pub fn connect_local() -> Result<Connection> {
     bridge(command)
 }
 
-fn bridge(mut command: Command) -> Result<Connection> {
+pub(crate) fn bridge(mut command: Command) -> Result<Connection> {
     let (socket, mut bridge) = stream::pair()?;
     let mut outgoing = bridge.try_clone()?;
     let mut child = command

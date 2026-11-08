@@ -14,4 +14,5 @@ gpui = { version = "0.2.2", features = ["runtime_shaders"] }
 image = { version = "0.25", default-features = false }
 
 [build-dependencies]
+sha2 = "0.10"
 winresource = { version = "0.1", default-features = false }

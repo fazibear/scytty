@@ -1,10 +1,11 @@
 set positional-arguments
 
-# Build both binaries so the GUI can start its matching local server.
+# Build local + bundled remote servers, then embed them in the GUI.
 build:
     #!/usr/bin/env bash
     set -euo pipefail
-    cargo build --release -p scytty -p scytty-server
+    bash scripts/build-servers.sh
+    SCYTTY_SERVER_BUNDLE="$PWD/target/server-bundle" cargo build --release -p scytty
     if [[ "$(uname -s)" == Darwin ]]; then
         app=target/release/Scytty.app
         mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
@@ -31,6 +32,10 @@ run *args: build
 
 build-server:
     cargo build --release -p scytty-server
+
+# Linux x86_64/ARM64; also macOS ARM64/x86_64 when building on macOS.
+build-servers:
+    bash scripts/build-servers.sh
 
 # Requires Zig and: rustup target add x86_64-unknown-linux-gnu
 build-linux:

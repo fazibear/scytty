@@ -9,4 +9,5 @@ ghostty-vt.workspace = true
 scytty-common.workspace = true
 portable-pty = "0.9"
 libc = "0.2"
+sha2 = "0.10"
 base64 = "0.22"

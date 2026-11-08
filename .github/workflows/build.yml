@@ -9,8 +9,64 @@ permissions:
   contents: read
 
 jobs:
+  servers:
+    name: Server ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            platform: macos-arm64
+            target: aarch64-apple-darwin
+          - runner: macos-15-intel
+            platform: macos-x86_64
+            target: x86_64-apple-darwin
+          - runner: ubuntu-22.04
+            platform: linux-x86_64
+            target: x86_64-unknown-linux-musl
+          - runner: ubuntu-24.04-arm
+            platform: linux-arm64
+            target: aarch64-unknown-linux-musl
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - uses: Swatinem/rust-cache@v2
+      - name: Test and build server
+        shell: bash
+        run: |
+          cargo test --locked -p scytty-server -p scytty-common
+          if [[ '${{ runner.os }}' == Linux ]]; then
+            host=$(rustc -vV | awk '/^host:/ {print $2}')
+            export RUSTFLAGS="-C linker=$(rustc --print sysroot)/lib/rustlib/$host/bin/rust-lld -C linker-flavor=ld.lld"
+          fi
+          cargo build --locked --release -p scytty-server --target '${{ matrix.target }}'
+          mkdir -p bundle dist package
+          cp 'target/${{ matrix.target }}/release/scytty-server' package/scytty-server
+          if [[ '${{ runner.os }}' == macOS ]]; then
+            codesign --force --sign - package/scytty-server
+          fi
+          cp package/scytty-server 'bundle/scytty-server-${{ matrix.platform }}'
+          tar -czf 'dist/scytty-server-${{ matrix.platform }}.tar.gz' -C package scytty-server
+      - uses: actions/upload-artifact@v4
+        with:
+          name: server-bundle-${{ matrix.platform }}
+          path: bundle/*
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: scytty-server-${{ matrix.platform }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
   build:
-    name: ${{ matrix.platform }}
+    needs: servers
+    name: Desktop ${{ matrix.platform }}
     strategy:
       fail-fast: false
       matrix:
@@ -19,11 +75,16 @@ jobs:
             platform: macos-arm64
           - runner: windows-latest
             platform: windows-x86_64
-          - runner: ubuntu-22.04
-            platform: linux-x86_64
     runs-on: ${{ matrix.runner }}
+    env:
+      SCYTTY_SERVER_BUNDLE: ${{ github.workspace }}/server-bundle
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: server-bundle-*
+          path: server-bundle
+          merge-multiple: true
       # Avoid the tarball host's certificate-chain failure on Windows.
       - uses: actions/checkout@v4
         if: runner.os == 'Windows'
@@ -44,45 +105,31 @@ jobs:
         with:
           version: 0.17.0
       - uses: Swatinem/rust-cache@v2
-
-      - name: Build and test macOS desktop and server
-        if: runner.os == 'macOS'
+      - name: Verify complete bundle
+        shell: bash
         run: |
-          cargo test --locked --workspace
-          cargo build --locked --release --workspace
-
-      - name: Build and test Linux server
-        if: runner.os == 'Linux'
-        run: |
-          cargo test --locked -p scytty-server -p scytty-common
-          cargo build --locked --release -p scytty-server
-
-      - name: Build and test Windows GUI
-        if: runner.os == 'Windows'
+          for platform in linux-x86_64 linux-arm64 macos-arm64 macos-x86_64; do
+            test -s "server-bundle/scytty-server-$platform"
+          done
+      - name: Build and test desktop
         run: |
           cargo test --locked -p scytty -p scytty-common
           cargo build --locked --release -p scytty
-
       - name: Package Windows GUI
         if: runner.os == 'Windows'
         shell: bash
         run: |
           mkdir -p dist
           tar -czf dist/scytty-desktop-${{ matrix.platform }}.tar.gz -C target/release scytty.exe
-
-      - name: Package server
-        if: runner.os != 'Windows'
-        run: |
-          mkdir -p dist
-          tar -czf dist/scytty-server-${{ matrix.platform }}.tar.gz -C target/release scytty-server
-
       - name: Package macOS desktop
         if: runner.os == 'macOS'
         run: |
           app=dist/Scytty.app
           mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-          cp target/release/scytty target/release/scytty-server "$app/Contents/MacOS/"
+          cp target/release/scytty "$app/Contents/MacOS/"
+          cp server-bundle/scytty-server-macos-arm64 "$app/Contents/MacOS/scytty-server"
           cp assets/scytty.icns "$app/Contents/Resources/"
+          chmod 755 "$app/Contents/MacOS/scytty-server"
           version=$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "scytty"))')
           python3 - "$app/Contents/Info.plist" "$version" <<'PY'
           import plistlib
@@ -103,20 +150,18 @@ jobs:
           plutil -lint "$app/Contents/Info.plist"
           test -x "$app/Contents/MacOS/scytty"
           test -x "$app/Contents/MacOS/scytty-server"
-          codesign --force --sign - "$app/Contents/MacOS/scytty-server"
           codesign --force --sign - "$app"
           codesign --verify --deep --strict "$app"
           tar -czf dist/scytty-desktop-${{ matrix.platform }}.tar.gz -C dist Scytty.app
           rm -rf "$app"
-
       - uses: actions/upload-artifact@v4
         with:
-          name: scytty-${{ matrix.platform }}
+          name: scytty-desktop-${{ matrix.platform }}
           path: dist/*.tar.gz
           if-no-files-found: error
 
   release:
-    needs: build
+    needs: [servers, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write

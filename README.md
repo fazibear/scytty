@@ -55,25 +55,38 @@ Install and select a Nerd Font to display the status bar's icons.
 ## Just commands
 
 ```sh
-just build          # release GUI + matching local server; macOS also creates target/release/Scytty.app
+just build          # release GUI + local/embedded remote servers; macOS also creates target/release/Scytty.app
 just run            # build and launch GUI (installs to ~/Applications on macOS); accepts session / --ssh arguments
 just build-server   # native release server only
+just build-servers  # bundle Linux x86_64/ARM64; on macOS, also macOS ARM64/x86_64
 just build-linux    # Linux x86_64 server, using Zig (glibc 2.28+)
 just install-linux  # cross-build and install to 192.168.1.2:~/.local/bin
 ```
 
-Linux builds require `zig` on PATH and
-`rustup target add x86_64-unknown-linux-gnu`. Installation uses your system
-SSH credentials and atomically replaces the binary without restarting the
-remote daemon. Restart it separately when safe; restarting ends its sessions.
+`just build` / `just build-servers` install the needed Rust targets and require
+Zig on PATH. Linux payloads are statically linked with musl; macOS payloads can
+only be built on macOS. `just build` embeds everything in `target/server-bundle`.
+For a GUI-only development build with existing payloads:
+
+```sh
+SCYTTY_SERVER_BUNDLE="$PWD/target/server-bundle" cargo build -p scytty
+```
+
+Plain Cargo GUI builds without this variable have no remote payloads and report
+that limitation when connecting. Windows developers can populate this directory
+from the workflow's `server-bundle-*` artifacts before building.
+
+The older `just build-linux` / `just install-linux` commands remain available for
+manual glibc 2.28+ deployment; they require the `x86_64-unknown-linux-gnu` Rust
+target. Manual installation does not restart the remote daemon.
 
 ## GitHub Actions builds
 
 The `Build` workflow runs only when a tag is pushed. After all builds and tests
 succeed, it creates a GitHub Release for that tag with downloadable archives:
 
-- macOS ARM64: desktop `.app` bundle plus standalone server archives.
-- Linux x86_64: standalone server archive (built on Ubuntu 22.04).
+- macOS ARM64: desktop `.app` bundle; ARM64 and x86_64 standalone servers.
+- Linux x86_64 and ARM64: statically linked musl server archives.
 - Windows x86_64: GUI executable archive (SSH sessions only; no local server).
 
 Extract the desktop archive and move `Scytty.app` into Applications. Its matching
@@ -83,8 +96,9 @@ explicitly allowed in System Settings.
 
 On Windows, extract the desktop archive and run
 `scytty.exe --ssh user@host [session]`. OpenSSH (`ssh.exe`) must be on PATH,
-and `scytty-server` must be installed on the remote Unix host. To build locally,
-use `cargo build --release -p scytty` with Rust, Zig and the MSVC build tools.
+with no manual server installation needed. Both desktop archives embed all four
+remote server variants. To build locally, use Rust, Zig and the MSVC build tools;
+set `SCYTTY_SERVER_BUNDLE` as described above to include remote payloads.
 
 Publish a release with `git tag v0.1.0 && git push origin v0.1.0` (use a new tag
 for each release).
@@ -213,19 +227,28 @@ is `$SHELL`, falling back to `/bin/sh`. Windows is not supported.
 
 ## Remote sessions over SSH
 
-Build and install the headless server on the Linux host (same source revision
-as the client; Rust 1.96+ and Zig 0.17.x required for building):
+Use an official desktop release or `just build`, then connect:
 
 ```sh
-cargo build --release -p scytty-server
-install -m 755 target/release/scytty-server ~/.local/bin/scytty-server
+scytty --ssh user@host work
+# From source (builds the embedded payloads first):
+just run --ssh user@host work
 ```
 
-Ensure `scytty-server` is on PATH for non-interactive SSH commands. Then locally:
+Scytty detects the remote OS/architecture and uploads its embedded matching
+server to `~/.scytty/servers/<platform>-<sha256>/scytty-server`. An identical cached
+binary is reused; uploads are private and atomically installed. Supported remote
+hosts are Linux and macOS, each on x86_64 or ARM64. The host needs a POSIX shell,
+standard Unix utilities, SSH access and permission to execute files under HOME;
+no Rust toolchain or server on PATH is required.
 
-```sh
-cargo run -p scytty --release -- --ssh user@host work
-```
+Before attaching, Scytty compares the running daemon's executable with the
+bundled server. An identical daemon is reused. A different daemon produces a
+warning with an explicit **Restart with bundled server** button. **Restarting
+ends ALL sessions and shells on that remote host.** Closing the window instead
+leaves the daemon untouched. Confirmation rechecks the daemon PID and SHA-256
+before terminating it, then the client connects and starts the bundled version.
+Existing sessions are never automatically migrated or killed.
 
 One SSH connection carries the **entire session**, including every tab's
 input, output, snapshots and control messages. The system `ssh` client handles
@@ -244,7 +267,8 @@ formats change incompatibly. Restarting the daemon ends existing sessions.
 
 Connection/startup and runtime errors appear in a selectable text panel with a
 **Copy error** button, preserving the full error chain for diagnostics.
-A full Linux runtime/real SSH deployment has not been tested here.
+Deployment/cache reuse and explicit daemon replacement have automated local
+tests; real-host SSH and the complete release workflow still need validation.
 
 ## Scrollback
 

@@ -4923,6 +4923,7 @@ dependencies = [
  "image",
  "mlua",
  "scytty-common",
+ "sha2 0.10.9",
  "winresource",
 ]
 
@@ -4949,6 +4950,7 @@ dependencies = [
  "libc",
  "portable-pty",
  "scytty-common",
+ "sha2 0.10.9",
 ]
 
 [[package]]

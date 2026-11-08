@@ -48,6 +48,7 @@ fn copy_flushed(reader: &mut impl Read, writer: &mut impl Write) -> std::io::Res
 }
 
 mod cwd;
+pub mod daemon;
 mod user_vars;
 
 struct Tab {
