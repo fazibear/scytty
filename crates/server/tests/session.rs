@@ -1,3 +1,5 @@
+#![cfg(unix)]
+
 use anyhow::{Result, bail};
 use scytty_common::protocol::{self, Request, Update};
 use std::{

@@ -11,5 +11,10 @@ flate2 = "1"
 ghostty-vt.workspace = true
 png = "0.18"
 
+[target.'cfg(windows)'.dependencies]
+hmac = "0.12"
+sha2 = "0.10"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_Threading"] }
+
 [dev-dependencies]
 base64 = "0.22"

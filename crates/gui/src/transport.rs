@@ -23,18 +23,6 @@ pub fn connect(host: &str) -> Result<Connection> {
     bridge(crate::remote::command(host)?)
 }
 
-#[cfg(windows)]
-pub fn connect_local() -> Result<Connection> {
-    bail!("local sessions are not supported on Windows; use scytty --ssh user@host [session]")
-}
-
-#[cfg(unix)]
-pub fn connect_local() -> Result<Connection> {
-    let mut command = Command::new(scytty_common::connection::server_executable()?);
-    command.arg("--stdio");
-    bridge(command)
-}
-
 pub(crate) fn bridge(mut command: Command) -> Result<Connection> {
     let (socket, mut bridge) = stream::pair()?;
     let mut outgoing = bridge.try_clone()?;

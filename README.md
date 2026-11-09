@@ -87,16 +87,18 @@ succeed, it creates a GitHub Release for that tag with downloadable archives:
 
 - macOS ARM64: desktop `.app` bundle; ARM64 and x86_64 standalone servers.
 - Linux x86_64 and ARM64: statically linked musl server archives.
-- Windows x86_64: GUI executable archive (SSH sessions only; no local server).
+- Windows x86_64: GUI and matching local server executable archive (ConPTY).
 
 Extract the desktop archive and move `Scytty.app` into Applications. Its matching
 server is bundled inside, so no separate server installation is needed locally.
 The app is ad-hoc signed, **not notarized**; macOS Gatekeeper may block it until
 explicitly allowed in System Settings.
 
-On Windows, extract the desktop archive and run
-`scytty.exe --ssh user@host [session]`. OpenSSH (`ssh.exe`) must be on PATH,
-with no manual server installation needed. Both desktop archives embed all four
+On Windows 10 version 1809 or later, extract both executables into the same
+folder and run `scytty.exe` for a local session. The server starts automatically
+and sessions survive closing the GUI. Run `scytty.exe --ssh user@host [session]`
+for remote Unix sessions; OpenSSH (`ssh.exe`) must be on PATH, with no manual
+remote server installation needed. Both desktop archives embed all four
 remote server variants. To build locally, use Rust, Zig and the MSVC build tools;
 set `SCYTTY_SERVER_BUNDLE` as described above to include remote payloads.
 
@@ -227,8 +229,18 @@ New tabs inherit the active tab's working directory on the server (local or SSH)
 process's directory or the shell's directory as a fallback. If neither can be
 read, the server's launch directory is used.
 
-The GUI runs locally; the server supports macOS and Linux. The default shell
-is `$SHELL`, falling back to `/bin/sh`. Windows is not supported.
+The GUI runs locally; the server supports macOS, Linux, and Windows. On Unix,
+the default shell is `$SHELL`, falling back to `/bin/sh`; on Windows it is
+`%COMSPEC%`, falling back to `cmd.exe`. Windows tabs currently start in the
+server's launch directory rather than inheriting the foreground process cwd.
+
+Windows local connections use authenticated loopback TCP, with a random secret
+in a user-only ACL-protected `%LOCALAPPDATA%\\scytty\\server.endpoint` file
+(`%USERPROFILE%` is the fallback). Authentication uses HMAC-SHA256 with fresh
+client and server nonces before the usual versioned protocol. The daemon's
+`--check-daemon` and explicitly confirmed `--restart-daemon PID SHA256` commands
+are supported; a restart ends all its sessions. Automatic SSH deployment still
+supports only remote macOS/Linux hosts.
 
 ## Remote sessions over SSH
 

@@ -65,13 +65,7 @@ fn platform(output: &[u8]) -> Result<&'static str> {
 
 fn ssh(program: &OsStr, host: &str, script: &str) -> Command {
     let mut command = Command::new(program);
-    #[cfg(windows)]
-    {
-        // ssh.exe is a console program; without this flag each child of the
-        // windows-subsystem GUI allocates its own visible console window.
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
+    crate::platform::hide_console(&mut command);
     let script = format!("sh -c '{}'", script.replace('\'', "'\\''"));
     command.args([
         "-T",

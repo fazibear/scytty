@@ -25,6 +25,7 @@ mod config;
 mod fonts;
 mod images;
 mod links;
+mod platform;
 mod remote;
 mod scrollbar;
 mod transport;
@@ -265,7 +266,7 @@ impl Gui {
     fn connect(&mut self, host: Option<String>) -> Result<()> {
         let connection = match host {
             Some(host) => transport::connect(&host)?,
-            None => transport::connect_local()?,
+            None => platform::connect_local()?,
         };
         let mut writer = connection.socket.try_clone()?;
         writer.set_write_timeout(Some(Duration::from_secs(5)))?;
@@ -435,11 +436,7 @@ impl Gui {
             return;
         }
         let m = stroke.modifiers;
-        let command = if cfg!(target_os = "macos") {
-            m.platform
-        } else {
-            m.control
-        };
+        let command = platform::command_modifier(m);
         let result = if let Some(size) =
             zoomed_font_size(self.config.font_size, self.initial_font_size, stroke)
         {
@@ -454,7 +451,7 @@ impl Gui {
                 if stroke.key == "left" { -1 } else { 1 },
             )
             .map(|id| self.request(Request::Activate { id }))
-        } else if command && (cfg!(target_os = "macos") || m.shift) && stroke.key == "c" {
+        } else if platform::clipboard_modifier(m) && stroke.key == "c" {
             let result = self
                 .tabs
                 .get(&self.active)
@@ -466,7 +463,7 @@ impl Gui {
                     }
                 });
             Some(result)
-        } else if command && (cfg!(target_os = "macos") || m.shift) && stroke.key == "v" {
+        } else if platform::clipboard_modifier(m) && stroke.key == "v" {
             Some(
                 if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
                     self.paste(&text)
@@ -853,7 +850,7 @@ impl Gui {
             self.scrollbar_last_used = Instant::now();
         }
         let opacity = scrollbar::opacity(self.scrollbar_last_used.elapsed());
-        if cfg!(target_os = "macos") && scroll.total > scroll.len && opacity > 0. {
+        if platform::OVERLAY_SCROLLBAR && scroll.total > scroll.len && opacity > 0. {
             window.request_animation_frame();
         }
         scrollbar::ScrollBar::new(self.bounds, scroll).paint(window, opacity);
@@ -979,33 +976,7 @@ impl Gui {
     }
     fn header(&self, cx: &mut Context<Self>) -> Result<AnyElement> {
         let active = self.order.iter().find(|t| t.id == self.active);
-        let mut bar = div()
-            .id("titlebar")
-            .flex()
-            .items_center()
-            .h(px(32.))
-            .line_height(px(28.))
-            .pt(px(3.5))
-            .flex_shrink_0()
-            .overflow_hidden()
-            .on_mouse_down(MouseButton::Left, |event, window, _| {
-                if event.click_count == 2 {
-                    window.zoom_window();
-                } else {
-                    #[cfg(not(target_os = "windows"))]
-                    window.start_window_move();
-                }
-            });
-        if cfg!(target_os = "macos") {
-            bar = bar.pl(px(78.));
-        }
-        if cfg!(target_os = "windows") {
-            // gpui's start_window_move is a no-op on Windows. A Drag
-            // window-control hitbox makes WM_NCHITTEST return HTCAPTION, so
-            // titlebar clicks that no element consumes fall through to the
-            // native caption drag.
-            bar = bar.window_control_area(WindowControlArea::Drag);
-        }
+        let mut bar = platform::titlebar();
         let mut tabs = div()
             .flex()
             .items_center()
@@ -1067,25 +1038,7 @@ impl Gui {
                 .max_w(relative(0.4))
                 .overflow_hidden(),
         );
-        if cfg!(target_os = "windows") {
-            for (i, label) in ["−", "□", "×"].into_iter().enumerate() {
-                bar = bar.child(
-                    div()
-                        .id(("control", i))
-                        .w(px(46.))
-                        .flex_shrink_0()
-                        .text_center()
-                        .child(label)
-                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .on_click(move |_, window, _| match i {
-                            0 => window.minimize_window(),
-                            1 => window.zoom_window(),
-                            _ => window.remove_window(),
-                        }),
-                );
-            }
-        }
-        Ok(bar.into_any_element())
+        Ok(platform::window_controls(bar).into_any_element())
     }
 }
 impl Render for Gui {
@@ -1346,7 +1299,7 @@ impl Drop for Gui {
 
 fn zoomed_font_size(current: f32, initial: f32, stroke: &Keystroke) -> Option<f32> {
     let mods = stroke.modifiers;
-    if mods.alt || !(mods.control || (cfg!(target_os = "macos") && mods.platform)) {
+    if !platform::zoom_modifier(mods) {
         return None;
     }
     let step = match stroke.key.as_str() {
@@ -1514,11 +1467,7 @@ fn open_window(
             window_state::load(cx)
                 .unwrap_or_else(|| WindowBounds::Windowed(Bounds::centered(None, window_size, cx))),
         ),
-        titlebar: Some(TitlebarOptions {
-            title: Some("Scytty".into()),
-            appears_transparent: true,
-            traffic_light_position: Some(point(px(12.), px(10.))),
-        }),
+        titlebar: Some(platform::titlebar_options()),
         window_background: WindowBackgroundAppearance::Transparent,
         window_min_size: Some(size(px(200.), px(100.))),
         ..Default::default()

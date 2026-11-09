@@ -1,8 +1,12 @@
 use ghostty_vt::terminal::Scrollbar;
-use gpui::{Bounds, Pixels, Point, Window, fill, point, px, rgb, rgba, size};
+use gpui::{Bounds, Pixels, Point, Window, point, px, size};
 
 pub const WIDTH: f32 = 10.;
-pub const RESERVED_WIDTH: f32 = if cfg!(target_os = "macos") { 0. } else { WIDTH };
+pub const RESERVED_WIDTH: f32 = if crate::platform::OVERLAY_SCROLLBAR {
+    0.
+} else {
+    WIDTH
+};
 
 pub struct ScrollBar {
     pub track: Bounds<Pixels>,
@@ -53,19 +57,13 @@ impl ScrollBar {
             .min(usize::MAX as f64) as usize
     }
     pub fn paint(&self, window: &mut Window, opacity: f32) {
-        if cfg!(target_os = "macos") {
-            if self.max_offset == 0 {
-                return;
-            }
-            let mut color = rgba(0xffffff70);
-            color.a *= opacity;
-            let mut thumb = fill(self.thumb, color);
-            thumb.corner_radii = px((WIDTH - 4.) / 2.).into();
-            window.paint_quad(thumb);
-        } else {
-            window.paint_quad(fill(self.track, rgb(0x171717)));
-            window.paint_quad(fill(self.thumb, rgb(0x686868)));
-        }
+        crate::platform::paint_scrollbar(
+            window,
+            self.track,
+            self.thumb,
+            self.max_offset > 0,
+            opacity,
+        );
     }
 }
 

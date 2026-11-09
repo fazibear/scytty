@@ -113,14 +113,14 @@ jobs:
           done
       - name: Build and test desktop
         run: |
-          cargo test --locked -p scytty -p scytty-common
-          cargo build --locked --release -p scytty
-      - name: Package Windows GUI
+          cargo test --locked -p scytty -p scytty-common -p scytty-server
+          cargo build --locked --release -p scytty -p scytty-server
+      - name: Package Windows desktop
         if: runner.os == 'Windows'
         shell: bash
         run: |
           mkdir -p dist
-          tar -czf dist/scytty-desktop-${{ matrix.platform }}.tar.gz -C target/release scytty.exe
+          tar -czf dist/scytty-desktop-${{ matrix.platform }}.tar.gz -C target/release scytty.exe scytty-server.exe
       - name: Package macOS desktop
         if: runner.os == 'macOS'
         run: |

@@ -1,20 +1,17 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use ghostty_vt::{
     Terminal, TerminalOptions,
     terminal::{ClipboardWritePolicy, Event as VtEvent, ProgressState},
 };
-use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
+use portable_pty::{Child, MasterPty, PtySize, native_pty_system};
 use scytty_common::{
-    connection::{connect, socket_path},
+    connection::{Accepted, connect},
     protocol::{self, Progress, Request, TabInfo, Update},
+    stream::Stream,
 };
 use std::{
     collections::HashMap,
     io::{Read, Write},
-    os::unix::{
-        fs::PermissionsExt,
-        net::{UnixListener, UnixStream},
-    },
     sync::mpsc::{self, SyncSender},
     thread,
     time::Duration,
@@ -47,8 +44,8 @@ fn copy_flushed(reader: &mut impl Read, writer: &mut impl Write) -> std::io::Res
     }
 }
 
-mod cwd;
-pub mod daemon;
+mod platform;
+pub use platform::daemon;
 mod user_vars;
 
 struct Tab {
@@ -70,7 +67,7 @@ impl Drop for Tab {
 struct Client {
     id: u64,
     output: SyncSender<Update>,
-    socket: UnixStream,
+    socket: Stream,
 }
 impl Client {
     fn send(&self, update: Update) -> Result<()> {
@@ -133,6 +130,7 @@ impl Session {
     }
 }
 enum Event {
+    Shutdown,
     Attach(Client, String),
     Request(u64, Request),
     Detached(u64),
@@ -143,11 +141,7 @@ fn tab_cwd(tab: &Tab) -> Option<std::path::PathBuf> {
     if tab.exited {
         return None;
     }
-    let directory = |pid| cwd::process_cwd(pid).filter(|path| path.is_absolute() && path.is_dir());
-    tab.master
-        .process_group_leader()
-        .and_then(|pid| directory(pid as u32))
-        .or_else(|| tab.child.process_id().and_then(directory))
+    platform::tab_cwd(tab.master.as_ref(), tab.child.as_ref())
 }
 
 fn new_tab(
@@ -163,9 +157,7 @@ fn new_tab(
         pixel_width: 0,
         pixel_height: 0,
     })?;
-    let mut command =
-        CommandBuilder::new(std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()));
-    command.arg("-l");
+    let mut command = platform::shell();
     if let Some(cwd) = cwd {
         command.cwd(cwd);
     }
@@ -247,19 +239,7 @@ fn snapshot(tab: &Tab) -> Result<Update> {
 }
 
 pub fn run() -> Result<()> {
-    let path = socket_path()?;
-    // A held advisory lock prevents competing auto-starts from unlinking a live socket.
-    let lock = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(path.with_extension("lock"))?;
-    lock.try_lock().context("server already running")?;
-    if path.exists() {
-        std::fs::remove_file(&path)?;
-    }
-    let listener = UnixListener::bind(&path)?;
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+    let (_lock, listener) = platform::listen()?;
     let (tx, rx) = mpsc::sync_channel(256);
     let accept_tx = tx.clone();
     thread::spawn(move || {
@@ -271,6 +251,18 @@ pub fn run() -> Result<()> {
             thread::spawn(move || {
                 let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
                 let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
+                match platform::accept(&mut stream) {
+                    Ok(Accepted::Session) => {}
+                    Ok(Accepted::Control) => return,
+                    Ok(Accepted::Restart) => {
+                        let _ = tx.send(Event::Shutdown);
+                        return;
+                    }
+                    Err(error) => {
+                        eprintln!("client authentication: {error:#}");
+                        return;
+                    }
+                }
                 if let Err(error) = protocol::handshake(&mut stream) {
                     eprintln!("client handshake: {error:#}");
                     return;
@@ -330,8 +322,10 @@ pub fn run() -> Result<()> {
     let mut sessions: HashMap<String, Session> = HashMap::new();
     let mut next_tab = 1;
     for event in rx {
+        let shutdown = matches!(event, Event::Shutdown);
         let result: Result<()> = (|| {
             match event {
+                Event::Shutdown => {}
                 Event::Attach(mut client, name) => {
                     if !sessions.contains_key(&name) {
                         let tab = new_tab(&name, next_tab, &tx, 16, None)?;
@@ -518,6 +512,9 @@ pub fn run() -> Result<()> {
                 session.emit(Update::Error(e.to_string()));
             }
         }
+        if shutdown {
+            break;
+        }
     }
     Ok(())
 }
@@ -527,7 +524,7 @@ mod tests {
     use super::*;
     #[test]
     fn output_bursts_wait_for_queue_capacity() -> Result<()> {
-        let (socket, _peer) = UnixStream::pair()?;
+        let (socket, _peer) = scytty_common::stream::pair()?;
         let (output, updates) = mpsc::sync_channel(1);
         let client = Client {
             id: 1,

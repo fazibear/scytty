@@ -4936,8 +4936,11 @@ dependencies = [
  "bincode",
  "flate2",
  "ghostty-vt",
+ "hmac",
  "png 0.18.1",
  "serde",
+ "sha2 0.10.9",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

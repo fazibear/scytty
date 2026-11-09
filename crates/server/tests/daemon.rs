@@ -1,3 +1,5 @@
+#![cfg(unix)]
+
 use anyhow::{Result, bail};
 use std::{
     fs,
