@@ -992,11 +992,19 @@ impl Gui {
                 if event.click_count == 2 {
                     window.zoom_window();
                 } else {
+                    #[cfg(not(target_os = "windows"))]
                     window.start_window_move();
                 }
             });
         if cfg!(target_os = "macos") {
             bar = bar.pl(px(78.));
+        }
+        if cfg!(target_os = "windows") {
+            // gpui's start_window_move is a no-op on Windows. A Drag
+            // window-control hitbox makes WM_NCHITTEST return HTCAPTION, so
+            // titlebar clicks that no element consumes fall through to the
+            // native caption drag.
+            bar = bar.window_control_area(WindowControlArea::Drag);
         }
         let mut tabs = div()
             .flex()
@@ -1101,7 +1109,6 @@ impl Render for Gui {
             .size_full()
             .flex()
             .flex_col()
-            .track_focus(&self.focus)
             .text_size(px(self.config.font_size))
             .font_family(self.config.font_family.clone())
             .text_color(rgb(0xdcdcdc))
@@ -1171,6 +1178,10 @@ impl Render for Gui {
         root.child(
             div()
                 .id("terminal")
+                // The root cannot track focus: its focus-transfer listener
+                // prevent_defaults every mouse down (including the titlebar's
+                // NC downs), which blocks the native caption drag.
+                .track_focus(&self.focus)
                 .flex_1()
                 .overflow_hidden()
                 .cursor(if self.link_hovered.is_some() {
