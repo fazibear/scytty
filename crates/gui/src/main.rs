@@ -290,12 +290,11 @@ impl Gui {
         let host = self.host.clone();
         let session = self.session.clone();
         let bin = self.bin.clone();
-        let scrollback_mb = self.config.scrollback_mb;
         let task = cx.background_executor().spawn(async move {
             if let Some(warning) = restart {
                 warning.restart()?;
             }
-            Self::connect(host, session, scrollback_mb, bin)
+            Self::connect(host, session, bin)
         });
         cx.spawn(async move |view, cx| {
             let result = task.await;
@@ -318,37 +317,32 @@ impl Gui {
         cx.notify();
     }
 
-    fn connect(
-        host: Option<String>,
-        session: String,
-        scrollback_mb: u16,
-        bin: Option<String>,
-    ) -> Result<Connected> {
+    fn connect(host: Option<String>, session: String, bin: Option<String>) -> Result<Connected> {
         let connection = match host.as_deref() {
             Some(host) => transport::connect(host)?,
             None => platform::connect_local()?,
         };
+        Self::attach(connection, session, bin).map_err(
+            |error| match remote::restart_after_mismatch(host.as_deref()) {
+                Err(warning) if warning.downcast_ref::<remote::RestartRequired>().is_some() => {
+                    warning.context(format!("{error:#}"))
+                }
+                _ => error,
+            },
+        )
+    }
+
+    fn attach(
+        connection: transport::Connection,
+        session: String,
+        bin: Option<String>,
+    ) -> Result<Connected> {
         let mut writer = connection.socket.try_clone()?;
         writer.set_write_timeout(Some(Duration::from_secs(5)))?;
         writer.set_read_timeout(Some(Duration::from_secs(5)))?;
-        if let Err(error) = protocol::handshake(&mut writer) {
-            drop(writer);
-            drop(connection);
-            return match remote::restart_after_mismatch(host.as_deref()) {
-                Err(warning) if warning.downcast_ref::<remote::RestartRequired>().is_some() => {
-                    Err(warning.context(format!("{error:#}")))
-                }
-                _ => Err(error),
-            };
-        }
+        protocol::handshake(&mut writer)?;
         writer.set_read_timeout(None)?;
         protocol::send(&mut writer, &Request::Attach { session, bin })?;
-        protocol::send(
-            &mut writer,
-            &Request::SetScrollback {
-                megabytes: scrollback_mb,
-            },
-        )?;
         let mut reader = writer.try_clone()?;
         let (tx, updates) = mpsc::sync_channel(256);
         thread::spawn(move || {
@@ -430,7 +424,13 @@ impl Gui {
                         usize::from(self.config.scrollback_mb) * 1024 * 1024,
                     ))?;
                     self.tabs.insert(id, Tab::new(terminal)?);
-                    self.connecting = false;
+                    if self.connecting {
+                        self.connecting = false;
+                        // A rejected attach must not close with an unread configuration request.
+                        self.request(Request::SetScrollback {
+                            megabytes: self.config.scrollback_mb,
+                        })?;
+                    }
                 }
                 Update::Output { id, bytes } => {
                     if let Some(tab) = self.tabs.get_mut(&id) {
@@ -1758,7 +1758,7 @@ mod tests {
     #[test]
     fn ssh_connection_failure_is_returned_from_worker() {
         let result =
-            thread::spawn(|| Gui::connect(Some("-invalid-host".into()), "test".into(), 16, None))
+            thread::spawn(|| Gui::connect(Some("-invalid-host".into()), "test".into(), None))
                 .join()
                 .expect("connection worker panicked");
         let error = result.err().expect("invalid SSH host must fail");

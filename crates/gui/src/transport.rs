@@ -73,6 +73,41 @@ mod tests {
         assert_eq!(response, message);
         Ok(())
     }
+    #[cfg(unix)]
+    #[test]
+    fn rejected_attach_has_no_pipelined_configuration() -> Result<()> {
+        use scytty_common::protocol::{self, Request, Update};
+        use std::{io::Read, time::Duration};
+        let (socket, mut server) = stream::pair()?;
+        let connection = Connection {
+            socket,
+            child: Command::new("/bin/sleep").arg("30").spawn()?,
+        };
+        let peer = thread::spawn(move || -> Result<()> {
+            protocol::handshake(&mut server)?;
+            assert!(matches!(
+                protocol::receive::<Request>(&mut server)?,
+                Request::Attach { .. }
+            ));
+            protocol::send(&mut server, &Update::Error("attach rejected".into()))?;
+            server.set_read_timeout(Some(Duration::from_millis(100)))?;
+            let error = server
+                .read(&mut [0])
+                .expect_err("configuration was sent before attach succeeded");
+            assert!(matches!(
+                error.kind(),
+                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+            ));
+            Ok(())
+        });
+        let connected = crate::Gui::attach(connection, "test".into(), None)?;
+        assert!(
+            matches!(connected.updates.recv_timeout(Duration::from_secs(5))??, Update::Error(message) if message == "attach rejected")
+        );
+        peer.join().expect("protocol peer panicked")?;
+        Ok(())
+    }
+
     #[test]
     fn ssh_destinations() {
         for host in ["user@host", "my-server", "user@::1"] {
