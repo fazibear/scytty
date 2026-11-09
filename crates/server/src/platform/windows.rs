@@ -22,6 +22,14 @@ pub mod daemon {
         bytes.iter().map(|byte| format!("{byte:02x}")).collect()
     }
 
+    pub fn identity() -> Result<()> {
+        match connection::daemon_status()? {
+            None => println!("stopped"),
+            Some((pid, digest)) => println!("old {pid} {}", hex(&digest)),
+        }
+        Ok(())
+    }
+
     pub fn check() -> Result<()> {
         match connection::daemon_status()? {
             None => println!("stopped"),
@@ -38,7 +46,9 @@ pub mod daemon {
         let Some((running_pid, running_digest)) = connection::daemon_status()? else {
             return Ok(());
         };
-        if running_digest == connection::executable_digest()? {
+        if running_digest == connection::executable_digest()?
+            && !hex(&running_digest).eq_ignore_ascii_case(digest)
+        {
             return Ok(());
         }
         if running_pid != pid || !hex(&running_digest).eq_ignore_ascii_case(digest) {

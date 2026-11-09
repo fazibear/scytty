@@ -55,7 +55,7 @@ fn tabs_and_reattach() -> Result<()> {
     let child = Command::new(env!("CARGO_BIN_EXE_scytty-server"))
         .arg("server")
         .env("HOME", &dir)
-        .env("SHELL", "/bin/sh")
+        .env("SHELL", "/missing-default-shell")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -70,6 +70,25 @@ fn tabs_and_reattach() -> Result<()> {
         }
         std::thread::sleep(Duration::from_millis(20));
     }
+    for (bin, expected) in [
+        ("/missing-scytty-program", "Could not start session"),
+        ("bad\nprogram", "bin must"),
+    ] {
+        let mut invalid = UnixStream::connect(&path)?;
+        invalid.set_read_timeout(Some(Duration::from_secs(5)))?;
+        protocol::handshake(&mut invalid)?;
+        protocol::send(
+            &mut invalid,
+            &Request::Attach {
+                session: "invalid-program".into(),
+                bin: Some(bin.into()),
+            },
+        )?;
+        match protocol::receive::<Update>(&mut invalid)? {
+            Update::Error(message) => assert!(message.contains(expected), "{message}"),
+            update => bail!("expected program error, got {update:?}"),
+        }
+    }
     let mut stream = connection.ok_or_else(|| anyhow::anyhow!("server failed to start"))?;
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     protocol::handshake(&mut stream)?;
@@ -77,6 +96,7 @@ fn tabs_and_reattach() -> Result<()> {
         &mut stream,
         &Request::Attach {
             session: "test".into(),
+            bin: Some("/bin/sh".into()),
         },
     )?;
     let (tabs, first) = state(&mut stream)?;
@@ -133,6 +153,7 @@ fn tabs_and_reattach() -> Result<()> {
         &mut duplicate,
         &Request::Attach {
             session: "test".into(),
+            bin: None,
         },
     )?;
     assert!(
@@ -232,6 +253,20 @@ fn tabs_and_reattach() -> Result<()> {
     stream.shutdown(std::net::Shutdown::Both)?;
     drop(stream);
     std::thread::sleep(Duration::from_millis(100));
+    let mut mismatch = UnixStream::connect(&path)?;
+    mismatch.set_read_timeout(Some(Duration::from_secs(5)))?;
+    protocol::handshake(&mut mismatch)?;
+    protocol::send(
+        &mut mismatch,
+        &Request::Attach {
+            session: "test".into(),
+            bin: Some("/bin/cat".into()),
+        },
+    )?;
+    assert!(
+        matches!(protocol::receive::<Update>(&mut mismatch)?, Update::Error(message) if message.contains("different program"))
+    );
+    drop(mismatch);
     let mut stream = UnixStream::connect(&path)?;
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     protocol::handshake(&mut stream)?;
@@ -239,6 +274,7 @@ fn tabs_and_reattach() -> Result<()> {
         &mut stream,
         &Request::Attach {
             session: "test".into(),
+            bin: None,
         },
     )?;
     let mut restored_image = false;
@@ -315,6 +351,7 @@ fn tabs_and_reattach() -> Result<()> {
         &mut replacement,
         &Request::Attach {
             session: "test".into(),
+            bin: Some("/bin/sh".into()),
         },
     )?;
     let (tabs, active) = state(&mut replacement)?;
@@ -337,6 +374,7 @@ fn tabs_and_reattach() -> Result<()> {
         &mut stream,
         &Request::Attach {
             session: "test".into(),
+            bin: Some("/bin/sh".into()),
         },
     )?;
     let (tabs, fresh) = state(&mut stream)?;

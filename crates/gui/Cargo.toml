@@ -5,14 +5,14 @@ edition.workspace = true
 default-run = "scytty"
 
 [dependencies]
-mlua = { version = "0.11", features = ["luajit", "vendored", "error-send"] }
+mlua.workspace = true
 anyhow.workspace = true
-fontdb = "0.23"
+fontdb.workspace = true
 ghostty-vt.workspace = true
 scytty-common.workspace = true
-gpui = { version = "0.2.2", features = ["runtime_shaders"] }
-image = { version = "0.25", default-features = false, features = ["png"] }
+gpui.workspace = true
+image.workspace = true
 
 [build-dependencies]
-sha2 = "0.10"
-winresource = { version = "0.1", default-features = false }
+sha2.workspace = true
+winresource.workspace = true

@@ -9,5 +9,20 @@ edition = "2024"
 
 [workspace.dependencies]
 anyhow = "1"
+base64 = "0.23"
+bincode = "1.3"
+flate2 = "1"
+fontdb = "0.24"
 ghostty-vt = { version = "=0.8.0", default-features = false, features = ["kitty-graphics"] }
+gpui = { version = "0.2.2", features = ["runtime_shaders"] }
+hmac = "0.13"
+image = { version = "0.25", default-features = false, features = ["png"] }
+libc = "0.2"
+mlua = { version = "0.12", features = ["luajit", "vendored", "error-send"] }
+png = "0.18"
+portable-pty = "0.9"
 scytty-common = { path = "crates/common" }
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.11"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_Threading"] }
+winresource = { version = "0.1", default-features = false }

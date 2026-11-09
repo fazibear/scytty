@@ -101,6 +101,7 @@ fn attach() -> Result<TcpStream> {
         &mut stream,
         &Request::Attach {
             session: "windows-test".into(),
+            bin: None,
         },
     )?;
     Ok(stream)

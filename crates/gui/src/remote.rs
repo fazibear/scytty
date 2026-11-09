@@ -18,12 +18,13 @@ pub(crate) struct RestartRequired {
     path: String,
     pid: u32,
     digest: String,
+    local: bool,
 }
 impl std::fmt::Display for RestartRequired {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "A different Scytty daemon is running on {} (PID {}). Restarting with the bundled server will end ALL remote sessions and shells. Close this window to leave it running.",
+            "A different Scytty daemon is running on {} (PID {}). Restarting with the bundled server will end ALL sessions and shells. Close this window to leave it running.",
             self.host, self.pid
         )
     }
@@ -35,13 +36,21 @@ impl RestartRequired {
             "exec \"{}\" --restart-daemon {} {}",
             self.path, self.pid, self.digest
         );
-        let result = ssh(OsStr::new("ssh"), &self.host, &script)
+        let mut command = if self.local {
+            let mut command = Command::new(&self.path);
+            command.args(["--restart-daemon", &self.pid.to_string(), &self.digest]);
+            crate::platform::hide_console(&mut command);
+            command
+        } else {
+            ssh(OsStr::new("ssh"), &self.host, &script)
+        };
+        let result = command
             .stdin(Stdio::null())
             .output()
             .context("could not restart remote daemon")?;
         if !result.status.success() {
             bail!(
-                "remote daemon restart failed: {}",
+                "daemon restart failed: {}",
                 String::from_utf8_lossy(&result.stderr).trim()
             );
         }
@@ -84,6 +93,39 @@ pub(crate) fn command(host: &str) -> Result<Command> {
 }
 
 fn prepare(host: &str, program: &OsStr, servers: &[Server]) -> Result<Command> {
+    prepare_inspecting(host, program, servers, false)
+}
+
+pub(crate) fn restart_after_mismatch(host: Option<&str>) -> Result<()> {
+    if let Some(host) = host {
+        prepare_inspecting(host, OsStr::new("ssh"), SERVERS, true)?;
+    } else {
+        let path = scytty_common::connection::server_executable()?;
+        let mut command = Command::new(&path);
+        crate::platform::hide_console(&mut command);
+        let status = command
+            .arg("--daemon-identity")
+            .stdin(Stdio::null())
+            .output()?;
+        if !status.status.success() {
+            bail!("could not identify local daemon");
+        }
+        check_status(
+            &status.stdout,
+            "this computer",
+            path.to_str().context("invalid local server path")?.into(),
+            true,
+        )?;
+    }
+    Ok(())
+}
+
+fn prepare_inspecting(
+    host: &str,
+    program: &OsStr,
+    servers: &[Server],
+    inspect: bool,
+) -> Result<Command> {
     super::transport::validate_host(host)?;
     let detected = ssh(program, host, DETECT)
         .stdin(Stdio::null())
@@ -148,7 +190,12 @@ mv -f "$tmp" "{path}"
         }
         written.context("could not upload bundled server")?;
     }
-    let status = ssh(program, host, &format!("exec \"{path}\" --check-daemon"))
+    let operation = if inspect {
+        "--daemon-identity"
+    } else {
+        "--check-daemon"
+    };
+    let status = ssh(program, host, &format!("exec \"{path}\" {operation}"))
         .stdin(Stdio::null())
         .output()
         .context("could not inspect remote daemon")?;
@@ -158,7 +205,12 @@ mv -f "$tmp" "{path}"
             String::from_utf8_lossy(&status.stderr).trim()
         );
     }
-    let text = std::str::from_utf8(&status.stdout).context("invalid remote daemon status")?;
+    check_status(&status.stdout, host, path.clone(), false)?;
+    Ok(ssh(program, host, &format!("exec \"{path}\" --stdio")))
+}
+
+fn check_status(status: &[u8], host: &str, path: String, local: bool) -> Result<()> {
+    let text = std::str::from_utf8(status).context("invalid daemon status")?;
     match text.trim() {
         "same" | "stopped" => {}
         other => {
@@ -175,13 +227,14 @@ mv -f "$tmp" "{path}"
                     path,
                     pid,
                     digest: (*digest).into(),
+                    local,
                 }
                 .into());
             }
             bail!("invalid remote daemon status: {text:?}");
         }
     }
-    Ok(ssh(program, host, &format!("exec \"{path}\" --stdio")))
+    Ok(())
 }
 
 #[cfg(test)]
@@ -235,7 +288,7 @@ mod tests {
             ),
         )?;
         fs::set_permissions(&ssh, fs::Permissions::from_mode(0o700))?;
-        let servers = [Server { platform: "linux-x86_64", digest: "test", bytes: b"#!/bin/sh\nif [ \"$1\" = --check-daemon ]; then if [ -f \"$HOME/status\" ]; then cat \"$HOME/status\"; else echo stopped; fi; exit; fi\n[ \"$1\" = --stdio ] || exit 2\nexec cat\n" }];
+        let servers = [Server { platform: "linux-x86_64", digest: "test", bytes: b"#!/bin/sh\nif [ \"$1\" = --check-daemon ] || [ \"$1\" = --daemon-identity ]; then if [ -f \"$HOME/status\" ]; then cat \"$HOME/status\"; else echo stopped; fi; exit; fi\n[ \"$1\" = --stdio ] || exit 2\nexec cat\n" }];
         fs::create_dir(root.0.join(".scytty"))?;
         fs::write(root.0.join(".scytty/server.sock"), "existing daemon")?;
         for _ in 0..2 {
@@ -269,7 +322,18 @@ mod tests {
         )?;
         let error = prepare("host", ssh.as_os_str(), &servers).unwrap_err();
         assert!(error.downcast_ref::<RestartRequired>().is_some());
-        assert!(error.to_string().contains("ALL remote sessions"));
+        assert!(error.to_string().contains("ALL sessions"));
+        let forced = prepare_inspecting("host", ssh.as_os_str(), &servers, true).unwrap_err();
+        assert!(forced.downcast_ref::<RestartRequired>().is_some());
+        assert!(fs::read_to_string(root.0.join("commands"))?.contains("--daemon-identity"));
+        let local = check_status(
+            format!("old 123 {}", "a".repeat(64)).as_bytes(),
+            "this computer",
+            "/server".into(),
+            true,
+        )
+        .unwrap_err();
+        assert!(local.downcast_ref::<RestartRequired>().unwrap().local);
         assert!(!fs::read_to_string(root.0.join("commands"))?.contains("--restart-daemon"));
         fs::write(root.0.join("status"), "old 123 not-a-digest\n")?;
         assert!(

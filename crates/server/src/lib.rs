@@ -3,7 +3,7 @@ use ghostty_vt::{
     Terminal, TerminalOptions,
     terminal::{ClipboardWritePolicy, Event as VtEvent, ProgressState},
 };
-use portable_pty::{Child, MasterPty, PtySize, native_pty_system};
+use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use scytty_common::{
     connection::{Accepted, connect},
     protocol::{self, Progress, Request, TabInfo, Update},
@@ -83,6 +83,7 @@ impl Drop for Client {
     }
 }
 struct Session {
+    bin: Option<String>,
     scrollback_mb: u16,
     tabs: Vec<Tab>,
     active: u64,
@@ -131,7 +132,7 @@ impl Session {
 }
 enum Event {
     Shutdown,
-    Attach(Client, String),
+    Attach(Client, String, Option<String>),
     Request(u64, Request),
     Detached(u64),
     Output(String, u64, Vec<u8>),
@@ -150,6 +151,7 @@ fn new_tab(
     tx: &SyncSender<Event>,
     scrollback_mb: u16,
     cwd: Option<&std::path::Path>,
+    bin: Option<&str>,
 ) -> Result<Tab> {
     let pair = native_pty_system().openpty(PtySize {
         cols: 80,
@@ -157,7 +159,10 @@ fn new_tab(
         pixel_width: 0,
         pixel_height: 0,
     })?;
-    let mut command = platform::shell();
+    let mut command = match bin {
+        Some(bin) => CommandBuilder::new(bin),
+        None => platform::shell(),
+    };
     if let Some(cwd) = cwd {
         command.cwd(cwd);
     }
@@ -267,13 +272,19 @@ pub fn run() -> Result<()> {
                     eprintln!("client handshake: {error:#}");
                     return;
                 }
-                let Ok(Request::Attach { session }) = protocol::receive(&mut stream) else {
+                let Ok(Request::Attach { session, bin }) = protocol::receive(&mut stream) else {
                     return;
                 };
                 if session.is_empty()
                     || session.len() > 128
                     || session.chars().any(char::is_control)
                 {
+                    return;
+                }
+                if let Some(bin) = &bin
+                    && let Err(error) = protocol::validate_bin(bin)
+                {
+                    let _ = protocol::send(&mut stream, &Update::Error(error.to_string()));
                     return;
                 }
                 let _ = stream.set_read_timeout(None);
@@ -290,7 +301,7 @@ pub fn run() -> Result<()> {
                     output,
                     socket,
                 };
-                if tx.send(Event::Attach(client, session)).is_err() {
+                if tx.send(Event::Attach(client, session, bin)).is_err() {
                     return;
                 }
                 thread::spawn(move || {
@@ -326,13 +337,23 @@ pub fn run() -> Result<()> {
         let result: Result<()> = (|| {
             match event {
                 Event::Shutdown => {}
-                Event::Attach(mut client, name) => {
+                Event::Attach(mut client, name, bin) => {
                     if !sessions.contains_key(&name) {
-                        let tab = new_tab(&name, next_tab, &tx, 16, None)?;
+                        let tab = match new_tab(&name, next_tab, &tx, 16, None, bin.as_deref()) {
+                            Ok(tab) => tab,
+                            Err(error) => {
+                                protocol::send(
+                                    &mut client.socket,
+                                    &Update::Error(format!("Could not start session: {error:#}")),
+                                )?;
+                                return Ok(());
+                            }
+                        };
                         next_tab += 1;
                         sessions.insert(
                             name.clone(),
                             Session {
+                                bin: bin.clone(),
                                 scrollback_mb: 16,
                                 active: tab.id,
                                 tabs: vec![tab],
@@ -348,8 +369,19 @@ pub fn run() -> Result<()> {
                         ))?;
                         return Ok(());
                     }
+                    if bin.is_some() && bin != session.bin {
+                        protocol::send(&mut client.socket, &Update::Error("Session already uses a different program; choose a different session name".into()))?;
+                        return Ok(());
+                    }
                     if session.tabs.is_empty() {
-                        let tab = new_tab(&name, next_tab, &tx, session.scrollback_mb, None)?;
+                        let tab = new_tab(
+                            &name,
+                            next_tab,
+                            &tx,
+                            session.scrollback_mb,
+                            None,
+                            session.bin.as_deref(),
+                        )?;
                         next_tab += 1;
                         session.active = tab.id;
                         session.tabs.push(tab);
@@ -445,6 +477,7 @@ pub fn run() -> Result<()> {
                                 &tx,
                                 session.scrollback_mb,
                                 cwd.as_deref(),
+                                session.bin.as_deref(),
                             )?;
                             next_tab += 1;
                             session.emit(snapshot(&tab)?);

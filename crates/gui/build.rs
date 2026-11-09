@@ -21,7 +21,10 @@ fn main() {
                 "empty bundled server: {}",
                 path.display()
             );
-            let digest = format!("{:x}", Sha256::digest(&bytes));
+            let digest: String = Sha256::digest(&bytes)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect();
             generated.push_str(&format!("Server {{ platform: {platform:?}, digest: {digest:?}, bytes: include_bytes!({path:?}) }},\n"));
             count += 1;
         }

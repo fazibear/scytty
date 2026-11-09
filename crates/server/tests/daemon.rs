@@ -144,5 +144,20 @@ fn daemon_upgrade_requires_confirmation() -> Result<()> {
             .success()
     );
     assert!(daemon.child.as_mut().unwrap().try_wait()?.is_none());
+    let identity = command(&daemon.home).arg("--daemon-identity").output()?;
+    assert!(identity.status.success());
+    let text = String::from_utf8(identity.stdout)?;
+    let fields: Vec<_> = text.split_whitespace().collect();
+    assert_eq!(fields[0], "old");
+    assert_eq!(fields[1], daemon.child.as_ref().unwrap().id().to_string());
+    assert!(
+        command(&daemon.home)
+            .args(["--restart-daemon", fields[1], fields[2]])
+            .status()?
+            .success()
+    );
+    daemon.child.as_mut().unwrap().wait()?;
+    daemon.child = None;
+    assert_eq!(status(&daemon.home)?, "stopped");
     Ok(())
 }

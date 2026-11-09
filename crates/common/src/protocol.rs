@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 
 // Bump whenever messages or the Ghostty snapshot format become incompatible.
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 const MAGIC: &[u8; 8] = b"SCYTTY\r\n";
 
 /// Fixed preamble: both peers write before reading, independent of frame encoding.
@@ -33,10 +33,20 @@ pub fn handshake(stream: &mut (impl Read + Write)) -> Result<()> {
     Ok(())
 }
 
+pub fn validate_bin(bin: &str) -> Result<()> {
+    if bin.trim().is_empty() || bin.len() > 4096 || bin.chars().any(char::is_control) {
+        bail!(
+            "bin must be a nonempty executable path or name, at most 4096 bytes, without control characters"
+        );
+    }
+    Ok(())
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Request {
     Attach {
         session: String,
+        bin: Option<String>,
     },
     NewTab,
     CloseTab {
@@ -148,6 +158,18 @@ pub fn receive<T: for<'a> Deserialize<'a>>(reader: &mut impl Read) -> Result<T> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn executable_validation() {
+        for bin in ["/usr/bin/fish", "htop", "C:\\Program Files\\app.exe"] {
+            assert!(validate_bin(bin).is_ok());
+        }
+        for bin in ["", "  ", "bad\nprogram", "bad\0program"] {
+            assert!(validate_bin(bin).is_err());
+        }
+        assert!(validate_bin(&"x".repeat(4097)).is_err());
+    }
+
     #[test]
     fn handshake_then_frames() -> Result<()> {
         let (mut client, mut server) = crate::stream::pair()?;

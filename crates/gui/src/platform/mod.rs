@@ -33,6 +33,7 @@ mod tests {
 
     #[test]
     fn keyboard_modifiers() {
+        let macos = cfg!(target_os = "macos");
         let control = Modifiers {
             control: true,
             ..Default::default()
@@ -41,19 +42,19 @@ mod tests {
             platform: true,
             ..Default::default()
         };
-        assert_eq!(command_modifier(control), !OVERLAY_SCROLLBAR);
-        assert_eq!(command_modifier(command), OVERLAY_SCROLLBAR);
+        assert_eq!(command_modifier(control), !macos);
+        assert_eq!(command_modifier(command), macos);
         assert!(!clipboard_modifier(control));
-        assert_eq!(clipboard_modifier(command), OVERLAY_SCROLLBAR);
+        assert_eq!(clipboard_modifier(command), macos);
         assert_eq!(
             clipboard_modifier(Modifiers {
                 shift: true,
                 ..control
             }),
-            !OVERLAY_SCROLLBAR
+            !macos
         );
         assert!(zoom_modifier(control));
-        assert_eq!(zoom_modifier(command), OVERLAY_SCROLLBAR);
+        assert_eq!(zoom_modifier(command), macos);
         assert!(!zoom_modifier(Modifiers {
             alt: true,
             ..control

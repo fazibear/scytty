@@ -169,6 +169,7 @@ struct Gui {
     config: Config,
     initial_font_size: f32,
     session: String,
+    bin: Option<String>,
     remote: bool,
     host: Option<String>,
     plus_menu_position: Option<gpui::Point<Pixels>>,
@@ -202,6 +203,7 @@ impl Gui {
         mut config: Config,
         session: String,
         host: Option<String>,
+        bin: Option<String>,
         cx: &mut Context<Self>,
     ) -> Self {
         let font = fonts::resolve(&config.font_family);
@@ -211,6 +213,7 @@ impl Gui {
             initial_font_size: config.font_size,
             config,
             session,
+            bin,
             remote: host.is_some(),
             host: host.clone(),
             plus_menu_position: None,
@@ -286,12 +289,13 @@ impl Gui {
         self.remote_restart = None;
         let host = self.host.clone();
         let session = self.session.clone();
+        let bin = self.bin.clone();
         let scrollback_mb = self.config.scrollback_mb;
         let task = cx.background_executor().spawn(async move {
             if let Some(warning) = restart {
                 warning.restart()?;
             }
-            Self::connect(host, session, scrollback_mb)
+            Self::connect(host, session, scrollback_mb, bin)
         });
         cx.spawn(async move |view, cx| {
             let result = task.await;
@@ -314,17 +318,31 @@ impl Gui {
         cx.notify();
     }
 
-    fn connect(host: Option<String>, session: String, scrollback_mb: u16) -> Result<Connected> {
-        let connection = match host {
-            Some(host) => transport::connect(&host)?,
+    fn connect(
+        host: Option<String>,
+        session: String,
+        scrollback_mb: u16,
+        bin: Option<String>,
+    ) -> Result<Connected> {
+        let connection = match host.as_deref() {
+            Some(host) => transport::connect(host)?,
             None => platform::connect_local()?,
         };
         let mut writer = connection.socket.try_clone()?;
         writer.set_write_timeout(Some(Duration::from_secs(5)))?;
         writer.set_read_timeout(Some(Duration::from_secs(5)))?;
-        protocol::handshake(&mut writer)?;
+        if let Err(error) = protocol::handshake(&mut writer) {
+            drop(writer);
+            drop(connection);
+            return match remote::restart_after_mismatch(host.as_deref()) {
+                Err(warning) if warning.downcast_ref::<remote::RestartRequired>().is_some() => {
+                    Err(warning.context(format!("{error:#}")))
+                }
+                _ => Err(error),
+            };
+        }
         writer.set_read_timeout(None)?;
-        protocol::send(&mut writer, &Request::Attach { session })?;
+        protocol::send(&mut writer, &Request::Attach { session, bin })?;
         protocol::send(
             &mut writer,
             &Request::SetScrollback {
@@ -954,11 +972,21 @@ impl Gui {
                         .duration_since(std::time::UNIX_EPOCH)?
                         .as_nanos()
                 );
-                open_window(Config::load()?, session, self.host.clone(), cx)
+                open_window(
+                    Config::load()?,
+                    session,
+                    self.host.clone(),
+                    self.bin.clone(),
+                    cx,
+                )
             }
-            config::MenuAction::Connect { host, session } => {
-                open_window(Config::load()?, session.clone(), Some(host.clone()), cx)
-            }
+            config::MenuAction::Connect { host, session, bin } => open_window(
+                Config::load()?,
+                session.clone(),
+                Some(host.clone()),
+                bin.clone(),
+                cx,
+            ),
         }
     }
     fn plus_menu(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -1266,9 +1294,14 @@ impl Render for Gui {
                                     .id("restart-remote-daemon")
                                     .mt(px(16.))
                                     .p(px(8.))
-                                    .bg(rgb(0x803030))
+                                    .rounded_xl()
+                                    .bg(rgb(0x38204f))
+                                    .border_2()
+                                    .border_color(rgb(0xac50f5))
+                                    .text_color(rgb(0xffffff))
+                                    .font_weight(FontWeight::BOLD)
                                     .cursor_pointer()
-                                    .child("Restart with bundled server — ends ALL remote sessions")
+                                    .child("Restart with bundled server — ends ALL sessions")
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         let Some(warning) = this.remote_restart.take() else {
                                             return;
@@ -1282,8 +1315,12 @@ impl Render for Gui {
                                         .id("copy-error")
                                         .mt(px(8.))
                                         .p(px(8.))
-                                        .rounded_md()
-                                        .bg(rgb(0x302039))
+                                        .rounded_xl()
+                                        .bg(rgb(0x38204f))
+                                        .border_2()
+                                        .border_color(rgb(0xac50f5))
+                                        .text_color(rgb(0xffffff))
+                                        .font_weight(FontWeight::BOLD)
                                         .child("Copy error")
                                         .cursor_pointer()
                                         .on_click(move |_, _, cx| {
@@ -1298,8 +1335,12 @@ impl Render for Gui {
                                     .id("close-error")
                                     .mt(px(8.))
                                     .p(px(8.))
-                                    .rounded_md()
-                                    .bg(rgb(0x302039))
+                                    .rounded_xl()
+                                    .bg(rgb(0x38204f))
+                                    .border_2()
+                                    .border_color(rgb(0xac50f5))
+                                    .text_color(rgb(0xffffff))
+                                    .font_weight(FontWeight::BOLD)
                                     .child("Close window")
                                     .cursor_pointer()
                                     .on_click(|_, window, _| window.remove_window()),
@@ -1647,6 +1688,7 @@ fn open_window(
     config: Config,
     session: String,
     host: Option<String>,
+    bin: Option<String>,
     cx: &mut gpui::App,
 ) -> Result<()> {
     let window_size = size(px(config.window_width), px(config.window_height));
@@ -1661,7 +1703,7 @@ fn open_window(
         ..Default::default()
     };
     cx.open_window(options, |window, cx| {
-        let view = cx.new(|cx| Gui::new(config, session, host, cx));
+        let view = cx.new(|cx| Gui::new(config, session, host, bin, cx));
         view.read(cx).focus.focus(window);
         view
     })?;
@@ -1684,7 +1726,7 @@ fn main() -> Result<()> {
         (None, argument.unwrap_or_else(|| "default".into()))
     };
     Application::new().run(move |cx| {
-        if let Err(e) = open_window(config, session, host, cx) {
+        if let Err(e) = open_window(config, session, host, None, cx) {
             eprintln!("Cannot open Scytty: {e:#}");
             cx.quit();
         }
@@ -1716,7 +1758,7 @@ mod tests {
     #[test]
     fn ssh_connection_failure_is_returned_from_worker() {
         let result =
-            thread::spawn(|| Gui::connect(Some("-invalid-host".into()), "test".into(), 16))
+            thread::spawn(|| Gui::connect(Some("-invalid-host".into()), "test".into(), 16, None))
                 .join()
                 .expect("connection worker panicked");
         let error = result.err().expect("invalid SSH host must fail");

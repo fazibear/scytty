@@ -2,7 +2,7 @@ use anyhow::Result;
 use gpui::{prelude::*, *};
 use std::{os::windows::process::CommandExt, process::Command};
 
-pub const OVERLAY_SCROLLBAR: bool = false;
+pub const OVERLAY_SCROLLBAR: bool = true;
 
 pub fn command_modifier(modifiers: Modifiers) -> bool {
     modifiers.control
@@ -50,13 +50,19 @@ pub fn window_controls(mut bar: Stateful<Div>) -> Stateful<Div> {
 
 pub fn paint_scrollbar(
     window: &mut Window,
-    track: Bounds<Pixels>,
+    _track: Bounds<Pixels>,
     thumb: Bounds<Pixels>,
-    _has_history: bool,
-    _opacity: f32,
+    has_history: bool,
+    opacity: f32,
 ) {
-    window.paint_quad(fill(track, rgb(0x171717)));
-    window.paint_quad(fill(thumb, rgb(0x686868)));
+    if !has_history {
+        return;
+    }
+    let mut color = rgba(0xffffff70);
+    color.a *= opacity;
+    let mut thumb = fill(thumb, color);
+    thumb.corner_radii = (thumb.bounds.size.width / 2.).into();
+    window.paint_quad(thumb);
 }
 
 pub fn connect_local() -> Result<crate::transport::Connection> {

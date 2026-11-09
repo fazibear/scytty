@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 use std::{
     fs::File,
-    io,
+    io::{self, Read},
     os::{fd::AsRawFd, unix::net::UnixStream},
     path::PathBuf,
     time::Duration,
@@ -10,12 +10,21 @@ use std::{
 
 fn hash(path: &std::path::Path) -> Result<String> {
     let mut digest = Sha256::new();
-    io::copy(
-        &mut File::open(path)
-            .with_context(|| format!("read daemon executable {}", path.display()))?,
-        &mut digest,
-    )?;
-    Ok(format!("{:x}", digest.finalize()))
+    let mut file =
+        File::open(path).with_context(|| format!("read daemon executable {}", path.display()))?;
+    let mut buffer = [0; 16384];
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+    }
+    Ok(digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
 }
 
 #[cfg(target_os = "linux")]
@@ -109,6 +118,14 @@ fn running() -> Result<Option<(libc::pid_t, String)>> {
     Ok(Some((pid, hash(&executable)?)))
 }
 
+pub fn identity() -> Result<()> {
+    match running()? {
+        None => println!("stopped"),
+        Some((pid, digest)) => println!("old {pid} {digest}"),
+    }
+    Ok(())
+}
+
 pub fn check() -> Result<()> {
     match running()? {
         None => println!("stopped"),
@@ -126,7 +143,8 @@ pub fn restart(pid: libc::pid_t, digest: &str) -> Result<()> {
     let Some(current) = running()? else {
         return Ok(());
     };
-    if current.1 == hash(&std::env::current_exe()?)? {
+    // macOS may report the replacement file's hash while an older image is running.
+    if current.1 == hash(&std::env::current_exe()?)? && current.1 != digest {
         return Ok(());
     }
     if current != (pid, digest.to_owned()) {

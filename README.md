@@ -210,7 +210,7 @@ return {
   plus_menu = {
     { label = "New tab", action = "new_tab" },
     { label = "New window", action = "new_window" },
-    { label = "Production", action = "connect", host = "user@server", session = "work" },
+    { label = "Production", action = "connect", host = "user@server", session = "work", bin = "/usr/bin/fish" },
   },
 }
 ```
@@ -218,7 +218,11 @@ return {
 The default menu contains New tab and New window; `plus_menu = {}` disables it.
 New window creates a fresh session on the current host. Connect opens a separate
 window; its session defaults to `default`. An already-attached session still
-requires closing its existing window first.
+requires closing its existing window first. Optional `bin` selects an executable
+path or name on the server (not a shell command or argument list). It is used for
+the new session and all its new tabs; omitted `bin` keeps the server's default
+shell or an existing session's program. An explicit different `bin` cannot replace
+an existing session's program: choose another `session` name instead.
 
 Click an HTTP/HTTPS URL or an OSC 8 hyperlink to open it in the system browser.
 Links are underlined on hover and the pointer becomes a hand; dragging still selects text. Other URL

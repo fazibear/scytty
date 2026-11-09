@@ -6,7 +6,11 @@ use std::path::PathBuf;
 pub enum MenuAction {
     NewTab,
     NewWindow,
-    Connect { host: String, session: String },
+    Connect {
+        host: String,
+        session: String,
+        bin: Option<String>,
+    },
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct MenuEntry {
@@ -197,7 +201,10 @@ impl Config {
                         let entry = entry?;
                         for key in entry.clone().pairs::<String, Value>() {
                             let (key, _) = key?;
-                            if !matches!(key.as_str(), "label" | "action" | "host" | "session") {
+                            if !matches!(
+                                key.as_str(),
+                                "label" | "action" | "host" | "session" | "bin"
+                            ) {
                                 bail!("unknown plus_menu field: {key}");
                             }
                         }
@@ -208,8 +215,11 @@ impl Config {
                         let name: String = entry.get("action")?;
                         let action = match name.as_str() {
                             "new_tab" | "new_window" => {
-                                if entry.contains_key("host")? || entry.contains_key("session")? {
-                                    bail!("host/session require a connect action");
+                                if entry.contains_key("host")?
+                                    || entry.contains_key("session")?
+                                    || entry.contains_key("bin")?
+                                {
+                                    bail!("host/session/bin require a connect action");
                                 }
                                 if name == "new_tab" {
                                     MenuAction::NewTab
@@ -229,7 +239,11 @@ impl Config {
                                 {
                                     bail!("connect session must be nonempty text");
                                 }
-                                MenuAction::Connect { host, session }
+                                let bin = entry.get::<Option<String>>("bin")?;
+                                if let Some(bin) = &bin {
+                                    scytty_common::protocol::validate_bin(bin)?;
+                                }
+                                MenuAction::Connect { host, session, bin }
                             }
                             _ => bail!("unknown plus_menu action: {name}"),
                         };
@@ -300,11 +314,21 @@ mod tests {
             config.plus_menu[2].action,
             MenuAction::Connect {
                 host: "user@host".into(),
-                session: "work".into()
+                session: "work".into(),
+                bin: None,
             }
+        );
+        let custom = Config::parse(
+            "return {plus_menu={{label='Fish',action='connect',host='192.168.1.2',bin='/usr/bin/fish'}}}",
+        )?;
+        assert!(
+            matches!(&custom.plus_menu[0].action, MenuAction::Connect { bin: Some(bin), .. } if bin == "/usr/bin/fish")
         );
         assert!(Config::parse("return {plus_menu={}}")?.plus_menu.is_empty());
         for source in [
+            "return {plus_menu={{label='x',action='connect',host='host',bin=''}}}",
+            "return {plus_menu={{label='x',action='connect',host='host',bin='bad\\nprogram'}}}",
+            "return {plus_menu={{label='x',action='new_tab',bin='/bin/sh'}}}",
             "return {plus_menu=42}",
             "return {plus_menu={{label='',action='new_tab'}}}",
             "return {plus_menu={{label='x',action='oops'}}}",
