@@ -11,7 +11,7 @@ fontdb = "0.23"
 ghostty-vt.workspace = true
 scytty-common.workspace = true
 gpui = { version = "0.2.2", features = ["runtime_shaders"] }
-image = { version = "0.25", default-features = false }
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [build-dependencies]
 sha2 = "0.10"

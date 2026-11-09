@@ -6,8 +6,24 @@ use ghostty_vt::{
 use gpui::{Bounds, ContentMask, Pixels, RenderImage, Window, point, px, size};
 use std::{
     collections::{HashMap, HashSet},
-    sync::Arc,
+    sync::{Arc, OnceLock},
 };
+
+pub fn error_reaper() -> Arc<RenderImage> {
+    static IMAGE: OnceLock<Arc<RenderImage>> = OnceLock::new();
+    IMAGE
+        .get_or_init(|| {
+            let mut pixels =
+                image::load_from_memory(include_bytes!("../../../assets/error-reaper.png"))
+                    .expect("bundled error reaper is a valid PNG")
+                    .into_rgba8();
+            for pixel in pixels.pixels_mut() {
+                pixel.0.swap(0, 2);
+            }
+            Arc::new(RenderImage::new(vec![image::Frame::new(pixels)]))
+        })
+        .clone()
+}
 
 #[derive(Default)]
 pub struct Images {
@@ -157,6 +173,11 @@ fn rgba_pixels(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn bundled_error_reaper_loads_and_is_cached() {
+        assert!(Arc::ptr_eq(&error_reaper(), &error_reaper()));
+    }
+
     #[test]
     fn pixel_formats_are_validated() {
         assert_eq!(

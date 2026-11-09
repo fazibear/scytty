@@ -147,6 +147,24 @@ impl Tab {
     }
 }
 
+fn message_line_rows(line: &str, breaks: impl Iterator<Item = usize>) -> Vec<String> {
+    let mut start = 0;
+    breaks
+        .chain(std::iter::once(line.len()))
+        .map(|end| {
+            let row = line[start..end].trim().to_owned();
+            start = end;
+            row
+        })
+        .collect()
+}
+
+struct Connected {
+    connection: transport::Connection,
+    writer: Stream,
+    updates: Receiver<Result<Update>>,
+}
+
 struct Gui {
     config: Config,
     initial_font_size: f32,
@@ -156,6 +174,7 @@ struct Gui {
     plus_menu_position: Option<gpui::Point<Pixels>>,
     plus_menu_selected: usize,
     connection: Option<transport::Connection>,
+    connecting: bool,
     writer: Option<Stream>,
     updates: Option<Receiver<Result<Update>>>,
     pending: Option<Result<Update>>,
@@ -197,6 +216,7 @@ impl Gui {
             plus_menu_position: None,
             plus_menu_selected: 0,
             connection: None,
+            connecting: false,
             writer: None,
             updates: None,
             pending: None,
@@ -219,11 +239,8 @@ impl Gui {
             scrollbar_position: None,
             scrollbar_hovered: false,
         };
-        if view.error.is_none()
-            && let Err(e) = view.connect(host)
-        {
-            view.remote_restart = e.downcast_ref::<remote::RestartRequired>().cloned();
-            view.error = Some(format!("{e:#}"));
+        if view.error.is_none() {
+            view.start_connect(None, cx);
         }
         cx.spawn(async move |view, cx| {
             let mut last_status = Instant::now();
@@ -263,7 +280,41 @@ impl Gui {
         .detach();
         view
     }
-    fn connect(&mut self, host: Option<String>) -> Result<()> {
+    fn start_connect(&mut self, restart: Option<remote::RestartRequired>, cx: &mut Context<Self>) {
+        self.connecting = true;
+        self.error = None;
+        self.remote_restart = None;
+        let host = self.host.clone();
+        let session = self.session.clone();
+        let scrollback_mb = self.config.scrollback_mb;
+        let task = cx.background_executor().spawn(async move {
+            if let Some(warning) = restart {
+                warning.restart()?;
+            }
+            Self::connect(host, session, scrollback_mb)
+        });
+        cx.spawn(async move |view, cx| {
+            let result = task.await;
+            let _ = view.update(cx, |view, cx| {
+                match result {
+                    Ok(connected) => {
+                        view.connection = Some(connected.connection);
+                        view.writer = Some(connected.writer);
+                        view.updates = Some(connected.updates);
+                    }
+                    Err(error) => {
+                        view.connecting = false;
+                        view.report(Err(error), cx);
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn connect(host: Option<String>, session: String, scrollback_mb: u16) -> Result<Connected> {
         let connection = match host {
             Some(host) => transport::connect(&host)?,
             None => platform::connect_local()?,
@@ -273,16 +324,11 @@ impl Gui {
         writer.set_read_timeout(Some(Duration::from_secs(5)))?;
         protocol::handshake(&mut writer)?;
         writer.set_read_timeout(None)?;
-        protocol::send(
-            &mut writer,
-            &Request::Attach {
-                session: self.session.clone(),
-            },
-        )?;
+        protocol::send(&mut writer, &Request::Attach { session })?;
         protocol::send(
             &mut writer,
             &Request::SetScrollback {
-                megabytes: self.config.scrollback_mb,
+                megabytes: scrollback_mb,
             },
         )?;
         let mut reader = writer.try_clone()?;
@@ -296,18 +342,25 @@ impl Gui {
                 }
             }
         });
-        self.writer = Some(writer);
-        self.updates = Some(updates);
-        self.connection = Some(connection);
-        Ok(())
+        Ok(Connected {
+            connection,
+            writer,
+            updates,
+        })
     }
     fn request(&mut self, request: Request) -> Result<()> {
+        if self.connecting {
+            return Ok(());
+        }
         protocol::send(
             self.writer.as_mut().context("Server is not connected")?,
             &request,
         )
     }
     fn input(&mut self, bytes: &[u8]) -> Result<()> {
+        if self.connecting {
+            return Ok(());
+        }
         let tab = self
             .tabs
             .get_mut(&self.active)
@@ -337,6 +390,7 @@ impl Gui {
     }
     fn report(&mut self, result: Result<()>, cx: &mut Context<Self>) {
         if let Err(e) = result {
+            self.connecting = false;
             self.remote_restart = e.downcast_ref::<remote::RestartRequired>().cloned();
             self.error = Some(format!("{e:#}"));
         }
@@ -358,6 +412,7 @@ impl Gui {
                         usize::from(self.config.scrollback_mb) * 1024 * 1024,
                     ))?;
                     self.tabs.insert(id, Tab::new(terminal)?);
+                    self.connecting = false;
                 }
                 Update::Output { id, bytes } => {
                     if let Some(tab) = self.tabs.get_mut(&id) {
@@ -1047,6 +1102,7 @@ impl Render for Gui {
         if self.error.is_none()
             && let Err(e) = self.drain(window)
         {
+            self.connecting = false;
             self.error = Some(format!("{e:#}"));
         }
         let mut root = div()
@@ -1072,50 +1128,182 @@ impl Render for Gui {
             .on_key_down(cx.listener(Self::key_down));
         match self.header(cx) {
             Ok(header) => root = root.child(header),
-            Err(e) => self.error = Some(format!("{e:#}")),
+            Err(e) => {
+                self.connecting = false;
+                self.error = Some(format!("{e:#}"));
+            }
         }
-        if let Some(error) = &self.error {
-            let error = error.clone();
+        if let Some(error) = self.error.clone().or_else(|| {
+            self.connecting.then(|| {
+                format!(
+                    "Connecting to {}…",
+                    self.host.as_deref().unwrap_or("local server")
+                )
+            })
+        }) {
+            let bubble_width = (window.viewport_size().width - px(48.)).clamp(px(41.), px(640.));
+            let text_width = bubble_width - px(40.);
+            let mut wrapper = window
+                .text_system()
+                .line_wrapper(font(self.config.font_family.clone()).bold(), px(16.));
+            let rows: Vec<_> = error
+                .split('\n')
+                .flat_map(|line| {
+                    let fragments = [LineFragment::text(line)];
+                    message_line_rows(
+                        line,
+                        wrapper
+                            .wrap_line(&fragments, text_width)
+                            .map(|boundary| boundary.ix),
+                    )
+                })
+                .collect();
             return root.child(
                 div()
-                    .p(px(24.))
-                    .child(error.clone())
-                    .children(self.remote_restart.as_ref().map(|_| {
+                    .id("error-screen")
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h(px(0.))
+                    .overflow_y_scroll()
+                    .child(
                         div()
-                            .id("restart-remote-daemon")
-                            .mt(px(16.))
-                            .p(px(8.))
-                            .bg(rgb(0x803030))
-                            .cursor_pointer()
-                            .child("Restart with bundled server — ends ALL remote sessions")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                let Some(warning) = this.remote_restart.take() else {
-                                    return;
-                                };
-                                let result = warning
-                                    .restart()
-                                    .and_then(|_| this.connect(this.host.clone()));
-                                if result.is_ok() {
-                                    this.error = None;
-                                }
-                                this.report(result, cx);
+                            .w_full()
+                            .flex_1()
+                            .flex_shrink_0()
+                            .p(px(24.))
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                div()
+                                    .id("error-message")
+                                    .text_center()
+                                    .w(bubble_width)
+                                    .max_h(px(240.))
+                                    .flex_shrink_0()
+                                    .overflow_y_scroll()
+                                    .p(px(18.))
+                                    .rounded_xl()
+                                    .bg(rgb(0x38204f))
+                                    .border_2()
+                                    .border_color(rgb(0xac50f5))
+                                    .text_color(rgb(0xffffff))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_size(px(16.))
+                                    .line_height(px(24.))
+                                    .shadow_lg()
+                                    .flex()
+                                    .flex_col()
+                                    .children(rows.into_iter().map(|line| {
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .flex_shrink_0()
+                                            .w(text_width)
+                                            .h(px(24.))
+                                            .whitespace_nowrap()
+                                            .text_center()
+                                            .child(line)
+                                    })),
+                            )
+                            .child(
+                                canvas(
+                                    |_, _, _| (),
+                                    |bounds, _, window, _| {
+                                        let mut tail = PathBuilder::fill();
+                                        tail.move_to(bounds.origin);
+                                        tail.line_to(
+                                            bounds.origin + point(bounds.size.width, px(0.)),
+                                        );
+                                        tail.line_to(
+                                            bounds.origin
+                                                + point(
+                                                    bounds.size.width * 0.5,
+                                                    bounds.size.height,
+                                                ),
+                                        );
+                                        tail.close();
+                                        window.paint_path(
+                                            tail.build().expect("speech bubble triangle is valid"),
+                                            rgb(0xac50f5),
+                                        );
+                                        let mut inner = PathBuilder::fill();
+                                        inner.move_to(bounds.origin + point(px(3.), px(0.)));
+                                        inner.line_to(
+                                            bounds.origin
+                                                + point(bounds.size.width - px(3.), px(0.)),
+                                        );
+                                        inner.line_to(
+                                            bounds.origin
+                                                + point(
+                                                    bounds.size.width * 0.5,
+                                                    bounds.size.height - px(4.),
+                                                ),
+                                        );
+                                        inner.close();
+                                        window.paint_path(
+                                            inner.build().expect("speech bubble inset is valid"),
+                                            rgb(0x38204f),
+                                        );
+                                    },
+                                )
+                                .w(px(28.))
+                                .h(px(18.))
+                                .mt(px(-2.))
+                                .flex_shrink_0(),
+                            )
+                            .child(
+                                img(images::error_reaper())
+                                    .size(px(240.))
+                                    .max_w(relative(1.))
+                                    .flex_shrink_0()
+                                    .object_fit(ObjectFit::Contain),
+                            )
+                            .children(self.remote_restart.as_ref().map(|_| {
+                                div()
+                                    .id("restart-remote-daemon")
+                                    .mt(px(16.))
+                                    .p(px(8.))
+                                    .bg(rgb(0x803030))
+                                    .cursor_pointer()
+                                    .child("Restart with bundled server — ends ALL remote sessions")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        let Some(warning) = this.remote_restart.take() else {
+                                            return;
+                                        };
+                                        this.start_connect(Some(warning), cx);
+                                    }))
                             }))
-                    }))
-                    .child(
-                        div()
-                            .id("copy-error")
-                            .child("Copy error")
-                            .cursor_pointer()
-                            .on_click(move |_, _, cx| {
-                                cx.write_to_clipboard(ClipboardItem::new_string(error.clone()))
-                            }),
-                    )
-                    .child(
-                        div()
-                            .id("close-error")
-                            .child("Close window")
-                            .cursor_pointer()
-                            .on_click(|_, window, _| window.remove_window()),
+                            .when(!self.connecting, |panel| {
+                                panel.child(
+                                    div()
+                                        .id("copy-error")
+                                        .mt(px(8.))
+                                        .p(px(8.))
+                                        .rounded_md()
+                                        .bg(rgb(0x302039))
+                                        .child("Copy error")
+                                        .cursor_pointer()
+                                        .on_click(move |_, _, cx| {
+                                            cx.write_to_clipboard(ClipboardItem::new_string(
+                                                error.clone(),
+                                            ))
+                                        }),
+                                )
+                            })
+                            .child(
+                                div()
+                                    .id("close-error")
+                                    .mt(px(8.))
+                                    .p(px(8.))
+                                    .rounded_md()
+                                    .bg(rgb(0x302039))
+                                    .child("Close window")
+                                    .cursor_pointer()
+                                    .on_click(|_, window, _| window.remove_window()),
+                            ),
                     ),
             );
         }
@@ -1514,6 +1702,27 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn message_rows_preserve_unicode_and_blank_lines() {
+        assert_eq!(
+            message_line_rows("hello 世界", [6].into_iter()),
+            ["hello", "世界"]
+        );
+        assert_eq!(message_line_rows("", std::iter::empty()), [""]);
+        assert_eq!(message_line_rows("short", std::iter::empty()), ["short"]);
+    }
+
+    #[test]
+    fn ssh_connection_failure_is_returned_from_worker() {
+        let result =
+            thread::spawn(|| Gui::connect(Some("-invalid-host".into()), "test".into(), 16))
+                .join()
+                .expect("connection worker panicked");
+        let error = result.err().expect("invalid SSH host must fail");
+        assert!(error.to_string().contains("invalid SSH destination"));
+    }
+
     use core::prelude::v1::test;
     use ghostty_vt::TerminalOptions;
     #[test]
