@@ -18,14 +18,23 @@ build:
         codesign --force --sign - "$app"
     fi
 
+# Build and install the macOS app.
+install: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ "$(uname -s)" != Darwin ]]; then
+        echo 'just install requires macOS' >&2
+        exit 1
+    fi
+    mkdir -p "$HOME/Applications"
+    ditto target/release/Scytty.app "$HOME/Applications/Scytty.app"
+
 # Example: just run --ssh 192.168.1.2 work
 run *args: build
     #!/usr/bin/env bash
     set -euo pipefail
     if [[ "$(uname -s)" == Darwin ]]; then
-        mkdir -p "$HOME/Applications"
-        ditto target/release/Scytty.app "$HOME/Applications/Scytty.app"
-        open -n -W "$HOME/Applications/Scytty.app" --args "$@"
+        open -n target/release/Scytty.app --args "$@"
     else
         exec ./target/release/scytty "$@"
     fi
