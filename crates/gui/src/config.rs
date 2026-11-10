@@ -442,6 +442,7 @@ mod tests {
                 timestamp.to_string(),
             )]);
             let tab = scytty_common::protocol::TabInfo {
+                mouse_shape: None,
                 user_vars: vars,
                 ..Default::default()
             };
@@ -470,6 +471,7 @@ mod tests {
             ("right_status_timestamp".into(), "9999999999".into()),
         ]);
         let tab = scytty_common::protocol::TabInfo {
+            mouse_shape: None,
             user_vars: vars,
             ..Default::default()
         };

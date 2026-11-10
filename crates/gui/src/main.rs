@@ -21,6 +21,7 @@ use std::{
     time::{Duration, Instant},
 };
 mod ansi;
+mod clipboard;
 mod config;
 mod find;
 mod fonts;
@@ -28,9 +29,11 @@ mod images;
 mod links;
 mod notifications;
 mod platform;
+mod pointer;
 mod reconnect;
 mod remote;
 mod scrollbar;
+mod semantic;
 mod terminal_paint;
 mod transport;
 mod window_state;
@@ -53,6 +56,8 @@ struct Tab {
     paint_cache: terminal_paint::Cache,
     search: Option<ghostty_vt::search::Search>,
     cursor: Option<(u16, u16)>,
+    cursor_color: Rgba,
+    default_colors: Option<(ghostty_vt::style::RgbColor, ghostty_vt::style::RgbColor)>,
     hold_since: Option<Instant>,
     encoder: key::Encoder,
     size: (u16, u16, u32, u32),
@@ -64,6 +69,7 @@ struct Tab {
 impl Tab {
     fn new(mut terminal: Terminal) -> Result<Self> {
         scytty_common::images::configure(&mut terminal)?;
+        scytty_common::clipboard::configure(&mut terminal)?;
         Ok(Self {
             terminal,
             render: RenderState::new()?,
@@ -72,6 +78,8 @@ impl Tab {
             paint_cache: Default::default(),
             search: None,
             cursor: None,
+            cursor_color: rgb(0xffffff),
+            default_colors: None,
             hold_since: None,
             encoder: key::Encoder::new()?,
             size: (0, 0, 0, 0),
@@ -97,6 +105,14 @@ impl Tab {
         self.resize_pending = true;
         true
     }
+    fn background(&mut self) -> Result<Rgba> {
+        let background = if hold_frame(&self.terminal, &mut self.hold_since)? {
+            self.default_colors.map(|(_, background)| background)
+        } else {
+            self.terminal.bg_color()?
+        };
+        Ok(color(background, rgb(0)))
+    }
     fn snapshot(&mut self) -> Result<()> {
         if hold_frame(&self.terminal, &mut self.hold_since)? {
             return Ok(());
@@ -107,9 +123,15 @@ impl Tab {
         } else {
             None
         };
+        let colors = snapshot.colors()?;
+        self.cursor_color = color(snapshot.cursor_color()?, rgb(0xffffff));
         let cols = usize::from(snapshot.cols()?);
         let rows_count = usize::from(snapshot.rows()?);
-        let full = snapshot.dirty()? == ghostty_vt::render::Dirty::Full
+        let effective_colors = (colors.foreground, colors.background);
+        let colors_changed = self.default_colors != Some(effective_colors);
+        self.default_colors = Some(effective_colors);
+        let full = colors_changed
+            || snapshot.dirty()? == ghostty_vt::render::Dirty::Full
             || self
                 .cells
                 .last()
@@ -133,9 +155,12 @@ impl Tab {
             let mut x = 0;
             while let Some(cell) = cells.next() {
                 let style = cell.style()?;
-                let mut fg = color(cell.fg_color()?, rgb(0xdcdcdc));
+                let mut fg = color(
+                    cell.fg_color()?,
+                    color(Some(colors.foreground), rgb(0xdcdcdc)),
+                );
                 let background = cell.bg_color()?;
-                let mut bg = color(background, rgb(0));
+                let mut bg = color(background, color(Some(colors.background), rgb(0)));
                 if style.inverse {
                     std::mem::swap(&mut fg, &mut bg);
                 }
@@ -491,7 +516,7 @@ impl Gui {
         }
         cx.notify();
     }
-    fn drain(&mut self, window: &mut Window) -> Result<()> {
+    fn drain(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Result<()> {
         for _ in 0..256 {
             let Some(rx) = &self.updates else { break };
             let update = match rx.try_recv() {
@@ -522,7 +547,15 @@ impl Gui {
                 Update::Output { id, bytes } => {
                     if let Some(tab) = self.tabs.get_mut(&id) {
                         tab.terminal.vt_write(&bytes);
-                        tab.terminal.events().for_each(notifications::handle);
+                        for event in tab.terminal.events() {
+                            if let ghostty_vt::terminal::Event::ClipboardWrite(write) = event {
+                                if let Some(item) = clipboard::item(write) {
+                                    cx.write_to_clipboard(item);
+                                }
+                            } else {
+                                notifications::handle(event);
+                            }
+                        }
                     }
                 }
                 Update::Resized {
@@ -654,6 +687,16 @@ impl Gui {
             Some(Ok(()))
         } else if command && stroke.key == "t" {
             Some(self.request(Request::NewTab))
+        } else if platform::clipboard_modifier(m) && matches!(stroke.key.as_str(), "up" | "down") {
+            Some((|| -> Result<()> {
+                if let Some(tab) = self.tabs.get_mut(&self.active)
+                    && let Some(row) = semantic::prompt_row(&tab.terminal, stroke.key == "up")?
+                {
+                    tab.terminal.scroll_viewport(ScrollViewport::Row(row));
+                    self.scrollbar_last_used = Instant::now();
+                }
+                Ok(())
+            })())
         } else if command && matches!(stroke.key.as_str(), "left" | "right") {
             adjacent_tab(
                 &self.order,
@@ -805,6 +848,20 @@ impl Gui {
                     self.scrollbar_last_used = Instant::now();
                     tab.terminal
                         .scroll_viewport(ScrollViewport::Row(bar.row(event.position.y, grab)));
+                    return Ok(());
+                }
+                if platform::command_modifier(event.modifiers) && event.modifiers.shift {
+                    let point = selection_point(
+                        event.position,
+                        self.bounds,
+                        self.cell,
+                        tab.terminal.cols()?,
+                        tab.terminal.rows()?,
+                    );
+                    let selection = tab.terminal.select_output(tab.terminal.grid_ref(point)?)?;
+                    tab.terminal.set_selection(selection.as_ref())?;
+                    tab.anchor = None;
+                    self.link_press = None;
                     return Ok(());
                 }
                 tab.terminal.set_selection(None)?;
@@ -1044,7 +1101,7 @@ impl Gui {
                         bounds.origin + point(cell.width * x as f32, cell.height * y as f32),
                         size(px(2.), cell.height),
                     ),
-                    rgb(0xffffff),
+                    tab.cursor_color,
                 ));
             }
             if self.find.is_none() && !self.marked.is_empty() {
@@ -1288,7 +1345,7 @@ impl Render for Gui {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.window_bounds = Some(window.window_bounds());
         if self.error.is_none()
-            && let Err(e) = self.drain(window)
+            && let Err(e) = self.drain(window, cx)
         {
             self.report(Err(e), cx);
         }
@@ -1310,7 +1367,11 @@ impl Render for Gui {
             .text_color(rgb(0xdcdcdc))
             .bg(Rgba {
                 a: self.config.background_opacity,
-                ..rgb(0)
+                ..self
+                    .tabs
+                    .get_mut(&self.active)
+                    .and_then(|tab| tab.background().ok())
+                    .unwrap_or_else(|| rgb(0))
             })
             .on_key_down(cx.listener(Self::key_down));
         match self.header(cx) {
@@ -1632,7 +1693,12 @@ impl Render for Gui {
                 .cursor(if self.link_hovered.is_some() {
                     CursorStyle::PointingHand
                 } else {
-                    CursorStyle::IBeam
+                    pointer::cursor(
+                        self.order
+                            .iter()
+                            .find(|tab| tab.id == self.active)
+                            .and_then(|tab| tab.mouse_shape.as_deref()),
+                    )
                 })
                 .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
                 .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
@@ -2147,6 +2213,54 @@ mod tests {
             restored.snapshot()?;
             assert_eq!(restored.cursor.is_some(), visible);
         }
+        Ok(())
+    }
+    #[test]
+    fn osc_default_colors_update_cached_cells_and_reset() -> Result<()> {
+        use ghostty_vt::style::RgbColor;
+        let mut terminal = Terminal::new(TerminalOptions::default())?;
+        terminal.set_default_fg_color(Some(RgbColor {
+            r: 0xdc,
+            g: 0xdc,
+            b: 0xdc,
+        }))?;
+        terminal.set_default_bg_color(Some(RgbColor { r: 0, g: 0, b: 0 }))?;
+        terminal.set_default_cursor_color(Some(RgbColor {
+            r: 255,
+            g: 255,
+            b: 255,
+        }))?;
+        terminal.vt_write(b"A\x1b[7mB\x1b[0m");
+        let mut tab = Tab::new(terminal)?;
+        tab.snapshot()?;
+        assert_eq!(tab.cells[0].fg, rgb(0xdcdcdc));
+        tab.terminal
+            .vt_write(b"\x1b]10;#112233\x07\x1b]11;#445566\x07\x1b]12;#778899\x07");
+        tab.snapshot()?;
+        assert_eq!(tab.cells[0].fg, rgb(0x112233));
+        assert_eq!(tab.cells[1].fg, rgb(0x445566));
+        assert_eq!(tab.cells[1].bg, Some(rgb(0x112233)));
+        assert_eq!(tab.cursor_color, rgb(0x778899));
+        assert_eq!(color(tab.terminal.bg_color()?, rgb(0)), rgb(0x445566));
+        let mut bytes = Vec::new();
+        ghostty_vt::snapshot::encode_to(&tab.terminal, &mut bytes)?;
+        let mut tab = Tab::new(ghostty_vt::snapshot::Decoder::from_slice(&bytes).decode()?)?;
+        tab.snapshot()?;
+        assert_eq!(tab.cells[0].fg, rgb(0x112233));
+        assert_eq!(tab.cursor_color, rgb(0x778899));
+        tab.terminal
+            .vt_write(b"\x1b]110\x07\x1b]111\x07\x1b]112\x07");
+        tab.snapshot()?;
+        assert_eq!(tab.cells[0].fg, rgb(0xdcdcdc));
+        assert_eq!(tab.cells[1].fg, rgb(0));
+        assert_eq!(tab.cursor_color, rgb(0xffffff));
+        assert_eq!(color(tab.terminal.bg_color()?, rgb(0)), rgb(0));
+        tab.terminal.vt_write(b"\x1b[?2026h\x1b]11;#123456\x07");
+        assert_eq!(tab.background()?, rgb(0));
+        tab.snapshot()?;
+        assert_eq!(tab.background()?, rgb(0));
+        tab.terminal.vt_write(b"\x1b[?2026l");
+        assert_eq!(tab.background()?, rgb(0x123456));
         Ok(())
     }
     #[test]

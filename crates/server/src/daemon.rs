@@ -153,6 +153,27 @@ pub fn restart(pid: libc::pid_t, digest: &str) -> Result<()> {
     if unsafe { libc::kill(pid, libc::SIGTERM) } != 0 {
         return Err(io::Error::last_os_error().into());
     }
+    if wait_for_shutdown(pid)? {
+        return Ok(());
+    }
+    // A launcher can leave SIGTERM ignored. Force only the exact daemon approved,
+    // never a replacement that appeared during the graceful shutdown wait.
+    let Some(current) = running()? else {
+        return Ok(());
+    };
+    if current != (pid, digest.to_owned()) {
+        bail!("daemon changed during shutdown; reconnect before retrying");
+    }
+    if unsafe { libc::kill(pid, libc::SIGKILL) } != 0 {
+        return Err(io::Error::last_os_error().into());
+    }
+    if wait_for_shutdown(pid)? {
+        return Ok(());
+    }
+    bail!("confirmed daemon did not stop after SIGTERM and SIGKILL; inspect PID {pid}")
+}
+
+fn wait_for_shutdown(pid: libc::pid_t) -> Result<bool> {
     let path = scytty_common::connection::socket_path()?;
     for _ in 0..100 {
         match UnixStream::connect(&path) {
@@ -162,11 +183,18 @@ pub fn restart(pid: libc::pid_t, digest: &str) -> Result<()> {
                     io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
                 ) =>
             {
-                return Ok(());
+                return Ok(true);
             }
             Err(error) => return Err(error.into()),
-            Ok(_) => std::thread::sleep(Duration::from_millis(50)),
+            Ok(socket) => {
+                match peer(&socket) {
+                    Ok((current, _)) if current != pid => return Ok(true),
+                    // The peer may exit between connect and executable lookup.
+                    _ => {}
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
         }
     }
-    bail!("daemon socket is still active; reconnect before retrying")
+    Ok(false)
 }

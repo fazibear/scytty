@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 
 // Bump whenever messages or the Ghostty snapshot format become incompatible.
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 const MAGIC: &[u8; 8] = b"SCYTTY\r\n";
 
 /// Fixed preamble: both peers write before reading, independent of frame encoding.
@@ -83,6 +83,7 @@ pub struct TabInfo {
     pub exited: bool,
     pub progress: Option<Progress>,
     pub user_vars: std::collections::BTreeMap<String, String>,
+    pub mouse_shape: Option<String>,
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Update {

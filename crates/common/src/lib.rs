@@ -1,3 +1,4 @@
+pub mod clipboard;
 pub mod connection;
 pub mod images;
 pub mod protocol;

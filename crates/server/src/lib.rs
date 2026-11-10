@@ -1,7 +1,7 @@
 use anyhow::{Result, bail};
 use ghostty_vt::{
     Terminal, TerminalOptions,
-    terminal::{ClipboardWritePolicy, Event as VtEvent, ProgressState},
+    terminal::{Event as VtEvent, ProgressState},
 };
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use scytty_common::{
@@ -46,11 +46,11 @@ fn copy_flushed(reader: &mut impl Read, writer: &mut impl Write) -> std::io::Res
 
 mod platform;
 pub use platform::daemon;
-mod user_vars;
+mod metadata;
 
 struct Tab {
     progress: Option<Progress>,
-    user_vars: user_vars::UserVars,
+    metadata: metadata::Metadata,
     id: u64,
     terminal: Terminal,
     master: Box<dyn MasterPty + Send>,
@@ -121,7 +121,8 @@ impl Session {
                 title: t.terminal.title().unwrap_or("").to_string(),
                 exited: t.exited,
                 progress: t.progress.clone(),
-                user_vars: t.user_vars.values.clone(),
+                user_vars: t.metadata.values.clone(),
+                mouse_shape: t.metadata.mouse_shape.clone(),
             })
             .collect();
         self.emit(Update::State {
@@ -178,7 +179,18 @@ fn new_tab(
     })?;
     terminal.set_scrollback_max_bytes(Some(usize::from(scrollback_mb) * 1024 * 1024))?;
     scytty_common::images::configure(&mut terminal)?;
-    terminal.set_clipboard_write_policy(ClipboardWritePolicy::Deny);
+    terminal.set_default_fg_color(Some(ghostty_vt::style::RgbColor {
+        r: 0xdc,
+        g: 0xdc,
+        b: 0xdc,
+    }))?;
+    terminal.set_default_bg_color(Some(ghostty_vt::style::RgbColor { r: 0, g: 0, b: 0 }))?;
+    terminal.set_default_cursor_color(Some(ghostty_vt::style::RgbColor {
+        r: 255,
+        g: 255,
+        b: 255,
+    }))?;
+    scytty_common::clipboard::configure(&mut terminal)?;
     let child = pair.slave.spawn_command(command)?;
     drop(pair.slave);
     let name = session.to_string();
@@ -204,7 +216,7 @@ fn new_tab(
     });
     Ok(Tab {
         progress: None,
-        user_vars: user_vars::UserVars::default(),
+        metadata: metadata::Metadata::default(),
         id,
         terminal,
         master: pair.master,
@@ -226,15 +238,6 @@ fn progress_report(state: ProgressState, percent: Option<u8>) -> Option<Progress
         state: state.into(),
         percent,
     })
-}
-
-fn terminal_reply(bytes: &[u8]) -> &[u8] {
-    // OSC 52 writes are denied, so do not advertise the Ms clipboard capability.
-    if bytes.starts_with(b"\x1bP1+r4D73=") {
-        b"\x1bP0+r4D73\x1b\\"
-    } else {
-        bytes
-    }
 }
 
 fn snapshot(tab: &Tab) -> Result<Update> {
@@ -409,16 +412,14 @@ pub fn run() -> Result<()> {
                         let old_progress = tab.progress.clone();
                         for event in tab.terminal.events() {
                             match event {
-                                VtEvent::PtyWrite(reply) => {
-                                    tab.writer.write_all(terminal_reply(&reply))?
-                                }
+                                VtEvent::PtyWrite(reply) => tab.writer.write_all(&reply)?,
                                 VtEvent::ProgressReport { state, progress } => {
                                     tab.progress = progress_report(state, progress);
                                 }
                                 _ => {}
                             }
                         }
-                        let vars_changed = tab.user_vars.feed(&bytes);
+                        let vars_changed = tab.metadata.feed(&bytes);
                         let changed = old_title != tab.terminal.title()?
                             || vars_changed
                             || old_progress != tab.progress;
@@ -591,19 +592,22 @@ mod tests {
     }
 
     #[test]
-    fn clipboard_capability_matches_denied_policy() -> Result<()> {
+    fn clipboard_capability_is_advertised() -> Result<()> {
         let mut terminal = Terminal::new(TerminalOptions::default())?;
-        terminal.set_clipboard_write_policy(ClipboardWritePolicy::Deny);
+        scytty_common::clipboard::configure(&mut terminal)?;
         terminal.vt_write(b"\x1bP+q4D73\x1b\\");
         let replies: Vec<_> = terminal
             .events()
             .filter_map(|event| match event {
-                VtEvent::PtyWrite(bytes) => Some(terminal_reply(&bytes).to_vec()),
+                VtEvent::PtyWrite(bytes) => Some(bytes),
                 _ => None,
             })
             .collect();
-        assert_eq!(replies, [b"\x1bP0+r4D73\x1b\\".to_vec()]);
-        assert_eq!(terminal_reply(b"\x1b[1;1R"), b"\x1b[1;1R");
+        assert!(
+            replies
+                .iter()
+                .any(|bytes| bytes.starts_with(b"\x1bP1+r4D73="))
+        );
         Ok(())
     }
 

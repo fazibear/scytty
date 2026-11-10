@@ -207,6 +207,10 @@ the daemon when safe (restarting ends existing sessions).
 - **Ctrl+Plus / Ctrl+Minus** (also Cmd on macOS): increase/decrease font size
 - **Ctrl+0** (also Cmd+0 on macOS): reset to the configured font size
 - **Drag**: select terminal text
+- **Cmd+Up / Cmd+Down** on macOS, **Ctrl+Shift+Up / Ctrl+Shift+Down** elsewhere:
+  jump to the previous/next shell prompt (OSC 133)
+- **Cmd+Shift+Click** on macOS, **Ctrl+Shift+Click** elsewhere:
+  select the clicked command's output (OSC 133)
 - **Scrollbar**: drag the right-hand thumb or click its track to navigate scrollback
 - **Cmd+C / Cmd+V** on macOS, **Ctrl+Shift+C / Ctrl+Shift+V** elsewhere:
   copy selection / paste clipboard (including over SSH)
@@ -249,6 +253,32 @@ Scytty notifications in your OS settings; on macOS use the installed Scytty.app.
 Requests are limited to one every two seconds across GUI windows, with bounded
 text and queue sizes. Windows registers a per-user Scytty notification identity.
 Click-to-focus actions and Kitty OSC 99 notifications are not implemented.
+
+Applications can copy UTF-8 text to the local system clipboard using OSC 52 or
+Kitty OSC 5522, including from SSH sessions. Writes/clears are enabled; clipboard
+reads are denied (remote programs cannot retrieve your clipboard). Text is limited
+to 8 MiB. Other MIME types and primary/selection clipboards are not supported and
+leave the system clipboard unchanged. OSC 5522 protocol acknowledgements confirm
+terminal acceptance, not successful OS clipboard delivery.
+
+```sh
+# OSC 52: copy "hello"
+printf '\033]52;c;aGVsbG8=\007'
+# OSC 5522: begin, send text/plain, commit
+printf '\033]5522;type=write\033\\'
+printf '\033]5522;type=wdata:mime=dGV4dC9wbGFpbg==;aGVsbG8=\033\\'
+printf '\033]5522;type=wdata\033\\'
+```
+
+Applications can change the terminal's default foreground/background/cursor colors
+with OSC 10/11/12 and reset them with OSC 110/111/112. Background opacity still
+applies. OSC 22 changes the mouse pointer; shapes unavailable in GPUI (including
+busy, help and zoom) use an arrow. Link hover takes precedence over the requested
+pointer. Colors and pointer state survive reattachment.
+
+Prompt navigation and command-output selection require OSC 133 markers emitted
+by the shell or its integration script. Scytty does not install shell hooks or
+infer command boundaries from prompt text.
 
 Click an HTTP/HTTPS URL or an OSC 8 hyperlink to open it in the system browser.
 Links are underlined on hover and the pointer becomes a hand; dragging still selects text. Other URL

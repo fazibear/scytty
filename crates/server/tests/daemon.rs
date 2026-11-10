@@ -3,6 +3,7 @@
 use anyhow::{Result, bail};
 use std::{
     fs,
+    os::unix::process::{CommandExt, ExitStatusExt},
     path::Path,
     process::{Child, Command, Stdio},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -80,8 +81,16 @@ fn daemon_upgrade_requires_confirmation() -> Result<()> {
             .open(&old)?
             .write_all(b"old-test-build")?;
     }
+    let mut old_command = Command::new(old);
+    // Reproduce a launcher passing an ignored SIGTERM through exec.
+    unsafe {
+        old_command.pre_exec(|| {
+            libc::signal(libc::SIGTERM, libc::SIG_IGN);
+            Ok(())
+        });
+    }
     daemon.child = Some(
-        Command::new(old)
+        old_command
             .arg("server")
             .env("HOME", &daemon.home)
             .stdin(Stdio::null())
@@ -113,7 +122,10 @@ fn daemon_upgrade_requires_confirmation() -> Result<()> {
         "{}",
         String::from_utf8_lossy(&approved.stderr)
     );
-    daemon.child.as_mut().unwrap().wait()?;
+    assert_eq!(
+        daemon.child.as_mut().unwrap().wait()?.signal(),
+        Some(libc::SIGKILL)
+    );
     daemon.child = None;
     assert_eq!(status(&daemon.home)?, "stopped");
     daemon.child = Some(

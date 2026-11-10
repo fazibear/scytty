@@ -239,7 +239,7 @@ fn tabs_and_reattach() -> Result<()> {
     }
     protocol::send(&mut stream, &Request::Input {
         id: first,
-        bytes: b"printf '\\033_Ga=T,q=2,f=24,s=1,v=1,i=7,c=2,r=2;/wAA\\033\\134\\033]0;image-ready\\007'\n".to_vec(),
+        bytes: b"printf '\\033_Ga=T,q=2,f=24,s=1,v=1,i=7,c=2,r=2;/wAA\\033\\134\\033]22;pointer\\007\\033]10;#112233\\007\\033]11;#445566\\007\\033]12;#778899\\007\\033]0;image-ready\\007'\n".to_vec(),
     })?;
     loop {
         if let Update::State { tabs, .. } = protocol::receive(&mut stream)?
@@ -247,6 +247,14 @@ fn tabs_and_reattach() -> Result<()> {
                 .iter()
                 .any(|t| t.id == first && t.title == "image-ready")
         {
+            assert_eq!(
+                tabs.iter()
+                    .find(|t| t.id == first)
+                    .unwrap()
+                    .mouse_shape
+                    .as_deref(),
+                Some("pointer")
+            );
             break;
         }
     }
@@ -292,9 +300,42 @@ fn tabs_and_reattach() -> Result<()> {
                 terminal.kitty_graphics()?.image(7).unwrap().data()?,
                 [255, 0, 0]
             );
+            use ghostty_vt::style::RgbColor;
+            assert_eq!(
+                terminal.fg_color()?,
+                Some(RgbColor {
+                    r: 0x11,
+                    g: 0x22,
+                    b: 0x33
+                })
+            );
+            assert_eq!(
+                terminal.bg_color()?,
+                Some(RgbColor {
+                    r: 0x44,
+                    g: 0x55,
+                    b: 0x66
+                })
+            );
+            assert_eq!(
+                terminal.cursor_color()?,
+                Some(RgbColor {
+                    r: 0x77,
+                    g: 0x88,
+                    b: 0x99
+                })
+            );
             restored_image = true;
         }
         if let Update::State { tabs, active } = update {
+            assert_eq!(
+                tabs.iter()
+                    .find(|t| t.id == first)
+                    .unwrap()
+                    .mouse_shape
+                    .as_deref(),
+                Some("pointer")
+            );
             assert_eq!(
                 tabs.iter().find(|t| t.id == first).unwrap().user_vars["right_status"],
                 "hello"

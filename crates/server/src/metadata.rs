@@ -2,16 +2,21 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use std::collections::BTreeMap;
 
 #[derive(Default)]
-pub struct UserVars {
+pub struct Metadata {
+    pub mouse_shape: Option<String>,
     pub values: BTreeMap<String, String>,
     osc: Option<Vec<u8>>,
     escape: bool,
 }
-impl UserVars {
+impl Metadata {
     pub fn feed(&mut self, bytes: &[u8]) -> bool {
         let mut changed = false;
         for &byte in bytes {
             if let Some(mut osc) = self.osc.take() {
+                if matches!(byte, 0x18 | 0x1a) {
+                    self.escape = false;
+                    continue;
+                }
                 if byte == 7 || (self.escape && byte == b'\\') {
                     changed |= self.apply(&osc);
                     self.escape = false;
@@ -31,6 +36,8 @@ impl UserVars {
             } else {
                 if self.escape && byte == b']' {
                     self.osc = Some(Vec::new());
+                } else if self.escape && byte == b'c' {
+                    changed |= self.mouse_shape.take().is_some();
                 }
                 self.escape = byte == 27;
             }
@@ -38,6 +45,62 @@ impl UserVars {
         changed
     }
     fn apply(&mut self, bytes: &[u8]) -> bool {
+        // The VT binding exposes neither mouse shape nor OSC 22 events. Keep this
+        // small piece of presentation state alongside the snapshot for reattachment.
+        if let Some(value) = bytes.strip_prefix(b"22;") {
+            let Ok(shape) = std::str::from_utf8(value) else {
+                return false;
+            };
+            if !matches!(
+                shape,
+                "" | "default"
+                    | "context-menu"
+                    | "help"
+                    | "pointer"
+                    | "progress"
+                    | "wait"
+                    | "cell"
+                    | "crosshair"
+                    | "text"
+                    | "vertical-text"
+                    | "alias"
+                    | "copy"
+                    | "move"
+                    | "no-drop"
+                    | "not-allowed"
+                    | "grab"
+                    | "grabbing"
+                    | "all-scroll"
+                    | "col-resize"
+                    | "row-resize"
+                    | "n-resize"
+                    | "e-resize"
+                    | "s-resize"
+                    | "w-resize"
+                    | "ne-resize"
+                    | "nw-resize"
+                    | "se-resize"
+                    | "sw-resize"
+                    | "ew-resize"
+                    | "ns-resize"
+                    | "nesw-resize"
+                    | "nwse-resize"
+                    | "zoom-in"
+                    | "zoom-out"
+            ) {
+                return false;
+            }
+            let next = if shape.is_empty() {
+                None
+            } else {
+                Some(shape.to_owned())
+            };
+            if self.mouse_shape == next {
+                return false;
+            }
+            self.mouse_shape = next;
+            return true;
+        }
         let Some(payload) = bytes.strip_prefix(b"1337;SetUserVar=") else {
             return false;
         };
@@ -78,9 +141,32 @@ impl UserVars {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mouse_shapes_are_bounded_fragmented_and_resettable() {
+        let mut metadata = Metadata::default();
+        assert!(!metadata.feed(b"\x1b]22;poi"));
+        assert!(metadata.feed(b"nter\x1b\\"));
+        assert_eq!(metadata.mouse_shape.as_deref(), Some("pointer"));
+        assert!(!metadata.feed(b"\x1b]22;pointer\x07"));
+        assert!(!metadata.feed(b"\x1b]22;invalid\x07"));
+        assert!(!metadata.feed(b"\x1b]22;text\x18\x07"));
+        assert_eq!(metadata.mouse_shape.as_deref(), Some("pointer"));
+        assert!(metadata.feed(b"\x1b]22;\x07"));
+        assert_eq!(metadata.mouse_shape, None);
+        assert!(metadata.feed(b"\x1b]22;default\x07"));
+        assert_eq!(metadata.mouse_shape.as_deref(), Some("default"));
+        assert!(metadata.feed(b"\x1bc"));
+        assert_eq!(metadata.mouse_shape, None);
+        let mut oversized = b"\x1b]22;".to_vec();
+        oversized.extend(std::iter::repeat_n(b'x', 9000));
+        oversized.extend_from_slice(b"\x07");
+        assert!(!metadata.feed(&oversized));
+        assert!(metadata.feed(b"\x1b]22;crosshair\x07"));
+    }
     #[test]
     fn split_sequences_and_validation() {
-        let mut vars = UserVars::default();
+        let mut vars = Metadata::default();
         let bytes = b"text\x1b]1337;SetUserVar=right_status=aGVsbG8=\x1b\\";
         for &b in bytes {
             vars.feed(&[b]);
