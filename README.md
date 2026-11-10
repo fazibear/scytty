@@ -198,6 +198,12 @@ the daemon when safe (restarting ends existing sessions).
 
 ## Default shortcuts
 
+- **Cmd+F** on macOS, **Ctrl+Shift+F** elsewhere: search the active tab's buffer,
+  including scrollback. **Enter / Shift+Enter** moves to the next/previous match;
+  **Escape** closes search. Matching is literal and ASCII case-insensitive (not
+  full Unicode case folding). Search runs locally, including for SSH sessions,
+  and leaves the terminal's text selection intact.
+
 - **Ctrl+Plus / Ctrl+Minus** (also Cmd on macOS): increase/decrease font size
 - **Ctrl+0** (also Cmd+0 on macOS): reset to the configured font size
 - **Drag**: select terminal text

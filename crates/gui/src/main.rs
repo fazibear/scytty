@@ -22,6 +22,7 @@ use std::{
 };
 mod ansi;
 mod config;
+mod find;
 mod fonts;
 mod images;
 mod links;
@@ -50,6 +51,7 @@ struct Tab {
     images: images::Images,
     cells: Vec<Cell>,
     paint_cache: terminal_paint::Cache,
+    search: Option<ghostty_vt::search::Search>,
     cursor: Option<(u16, u16)>,
     hold_since: Option<Instant>,
     encoder: key::Encoder,
@@ -68,6 +70,7 @@ impl Tab {
             images: Default::default(),
             cells: vec![],
             paint_cache: Default::default(),
+            search: None,
             cursor: None,
             hold_since: None,
             encoder: key::Encoder::new()?,
@@ -216,6 +219,7 @@ struct Gui {
     focus: FocusHandle,
     bounds: Bounds<Pixels>,
     cell: Size<Pixels>,
+    find: Option<find::Find>,
     marked: String,
     marked_selection: Range<usize>,
     scroll_remainder: f32,
@@ -261,6 +265,7 @@ impl Gui {
             focus: cx.focus_handle(),
             bounds: Bounds::default(),
             cell: size(px(8.), px(20.)),
+            find: None,
             marked: String::new(),
             marked_selection: 0..0,
             scroll_remainder: 0.,
@@ -439,6 +444,10 @@ impl Gui {
         })
     }
     fn paste(&mut self, text: &str) -> Result<()> {
+        if let Some(find) = &mut self.find {
+            find.replace(None, text);
+            return Ok(());
+        }
         let Some(tab) = self.tabs.get(&self.active) else {
             return Ok(());
         };
@@ -587,6 +596,56 @@ impl Gui {
             return;
         }
         let m = stroke.modifiers;
+        if platform::clipboard_modifier(m) && stroke.key == "f" {
+            let find = self.find.get_or_insert_with(Default::default);
+            find.selection = 0..find.query.len();
+            find.reversed = false;
+            self.marked.clear();
+            self.marked_selection = 0..0;
+            self.focus.focus(window);
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
+        if let Some(find) = &mut self.find {
+            let handled = match stroke.key.as_str() {
+                "escape" => {
+                    self.find = None;
+                    for tab in self.tabs.values_mut() {
+                        tab.search = None;
+                    }
+                    true
+                }
+                "enter" => {
+                    let result = self.find_step(m.shift);
+                    self.report(result, cx);
+                    true
+                }
+                "a" if platform::command_modifier(m) => {
+                    find.selection = 0..find.query.len();
+                    find.reversed = false;
+                    true
+                }
+                "c" if platform::clipboard_modifier(m) => {
+                    cx.write_to_clipboard(ClipboardItem::new_string(
+                        find.query[find.selection.clone()].to_owned(),
+                    ));
+                    true
+                }
+                "v" if platform::clipboard_modifier(m) => {
+                    if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+                        find.replace(None, &text);
+                    }
+                    true
+                }
+                key => find.edit(key, m.shift),
+            };
+            if handled {
+                cx.stop_propagation();
+                cx.notify();
+            }
+            return;
+        }
         let command = platform::command_modifier(m);
         let result = if let Some(size) =
             zoomed_font_size(self.config.font_size, self.initial_font_size, stroke)
@@ -630,6 +689,25 @@ impl Gui {
             self.report(result, cx);
         }
         self.focus.focus(window);
+    }
+    fn find_step(&mut self, previous: bool) -> Result<()> {
+        let Some(find) = &self.find else {
+            return Ok(());
+        };
+        let Some(tab) = self.tabs.get_mut(&self.active) else {
+            return Ok(());
+        };
+        if tab.search.is_none() {
+            tab.search = Some(ghostty_vt::search::Search::new(&tab.terminal)?);
+        }
+        let search = tab.search.as_mut().unwrap();
+        find::advance(search, &tab.terminal, &find.query)?;
+        if previous {
+            search.select_prev(&tab.terminal)?;
+        } else {
+            search.select_next(&tab.terminal)?;
+        }
+        Ok(())
     }
     fn encode_key(&mut self, stroke: &Keystroke) -> Result<Option<()>> {
         let Some(tab) = self.tabs.get_mut(&self.active) else {
@@ -865,6 +943,28 @@ impl Gui {
         if dimensions != tab.size && !tab.resize_pending {
             window.request_animation_frame();
         }
+        let highlights = if let Some(find) = &mut self.find {
+            if tab.search.is_none() {
+                tab.search = Some(ghostty_vt::search::Search::new(&tab.terminal)?);
+            }
+            let search = tab.search.as_mut().unwrap();
+            let running = find::advance(search, &tab.terminal, &find.query)?;
+            if search.selected_index()?.is_none() && search.total_matches()? > 0 {
+                search.select_next(&tab.terminal)?;
+                search.feed(&tab.terminal)?;
+            }
+            let stats = (search.total_matches()?, search.selected_index()?, running);
+            if find.stats != stats {
+                find.stats = stats;
+                cx.notify();
+            }
+            if running {
+                window.request_animation_frame();
+            }
+            find::highlights(search, &tab.terminal)?
+        } else {
+            vec![]
+        };
         tab.snapshot()?;
         let hovered_cells = if let Some(position) = self.link_hovered {
             links::hovered_cells(
@@ -894,6 +994,23 @@ impl Gui {
                 image.paint(window)?;
             }
             tab.paint_cache.backgrounds(bounds.origin, cell, window);
+            for highlight in &highlights {
+                window.paint_quad(fill(
+                    Bounds::new(
+                        bounds.origin
+                            + point(
+                                cell.width * highlight.x as f32,
+                                cell.height * highlight.y as f32,
+                            ),
+                        size(cell.width * highlight.width as f32, cell.height),
+                    ),
+                    if highlight.selected {
+                        rgba(0xb36b00dd)
+                    } else {
+                        rgba(0x80700099)
+                    },
+                ));
+            }
             for image in images.iter().filter(|i| i.z < 0 && i.z >= i32::MIN / 2) {
                 image.paint(window)?;
             }
@@ -930,7 +1047,7 @@ impl Gui {
                     rgb(0xffffff),
                 ));
             }
-            if !self.marked.is_empty() {
+            if self.find.is_none() && !self.marked.is_empty() {
                 let (x, y) = tab.cursor.unwrap_or((0, 0));
                 let run = TextRun {
                     len: self.marked.len(),
@@ -1203,6 +1320,96 @@ impl Render for Gui {
                 self.error = Some(format!("{e:#}"));
             }
         }
+        let mut find_overlay = None;
+        if let Some(find) = &self.find {
+            let (count, selected, running) = find.stats;
+            let before = find.query[..find.selection.start].to_owned();
+            let selected_text = find.query[find.selection.clone()].to_owned();
+            let after = find.query[find.selection.end..].to_owned();
+            find_overlay = Some(
+                div()
+                    .absolute()
+                    .top(px(36.))
+                    .right(px(8.))
+                    .w(px(420.))
+                    .max_w((window.viewport_size().width - px(16.)).max(px(0.)))
+                    .occlude()
+                    .flex()
+                    .items_center()
+                    .h(px(32.))
+                    .px(px(8.))
+                    .gap(px(8.))
+                    .bg(rgb(0x28202f))
+                    .child("Find:")
+                    .child(
+                        div()
+                            .flex()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .child(before)
+                            .child(div().bg(rgb(0x604080)).child(if selected_text.is_empty() {
+                                "▏".to_owned()
+                            } else {
+                                selected_text
+                            }))
+                            .child(after),
+                    )
+                    .child(format!(
+                        "{} / {}{}",
+                        selected.map_or(0, |i| i + 1),
+                        count,
+                        if running { "…" } else { "" }
+                    ))
+                    .child(
+                        div()
+                            .id("find-previous")
+                            .cursor_pointer()
+                            .child("↑")
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    // Ghostty's next match is older content (up).
+                                    let result = this.find_step(false);
+                                    this.report(result, cx);
+                                }),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id("find-next")
+                            .cursor_pointer()
+                            .child("↓")
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    let result = this.find_step(true);
+                                    this.report(result, cx);
+                                }),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id("find-close")
+                            .cursor_pointer()
+                            .child("×")
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    this.find = None;
+                                    for tab in this.tabs.values_mut() {
+                                        tab.search = None;
+                                    }
+                                    cx.notify();
+                                }),
+                            ),
+                    ),
+            );
+        }
         if let Some(retry) = &self.reconnect {
             root = root.child(
                 div()
@@ -1469,6 +1676,7 @@ impl Render for Gui {
                     .size_full(),
                 ),
         )
+        .children(find_overlay)
         .children(menu)
     }
 }
@@ -1480,6 +1688,11 @@ impl EntityInputHandler for Gui {
         _: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<String> {
+        if let Some(find) = &self.find {
+            let range = find.byte_range(range);
+            *actual = Some(find.utf16_range(range.clone()));
+            return Some(find.query[range].to_owned());
+        }
         *actual = Some(range.clone());
         Some(
             self.marked
@@ -1497,27 +1710,41 @@ impl EntityInputHandler for Gui {
         _: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
         Some(UTF16Selection {
-            range: self.marked_selection.clone(),
-            reversed: false,
+            range: self.find.as_ref().map_or_else(
+                || self.marked_selection.clone(),
+                |f| f.utf16_range(f.selection.clone()),
+            ),
+            reversed: self.find.as_ref().is_some_and(|f| f.reversed),
         })
     }
     fn marked_text_range(&self, _: &mut Window, _: &mut Context<Self>) -> Option<Range<usize>> {
+        if let Some(find) = &self.find {
+            return find.marked.clone().map(|r| find.utf16_range(r));
+        }
         (!self.marked.is_empty()).then(|| 0..self.marked.encode_utf16().count())
     }
     fn unmark_text(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(find) = &mut self.find {
+            find.marked = None;
+        }
         self.marked.clear();
         self.marked_selection = 0..0;
         cx.notify();
     }
     fn replace_text_in_range(
         &mut self,
-        _: Option<Range<usize>>,
+        range: Option<Range<usize>>,
         text: &str,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.marked.clear();
         self.marked_selection = 0..0;
+        if let Some(find) = &mut self.find {
+            find.replace(range, text);
+            cx.notify();
+            return;
+        }
         let result = if self.tabs.contains_key(&self.active) {
             self.input(text.as_bytes())
         } else {
@@ -1533,6 +1760,17 @@ impl EntityInputHandler for Gui {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Some(find) = &mut self.find {
+            let inserted = find.replace(range, text);
+            let start = find.utf16_range(inserted.clone()).start;
+            if let Some(selected) = selected {
+                find.selection = find.byte_range(start + selected.start..start + selected.end);
+                find.reversed = false;
+            }
+            find.marked = Some(inserted);
+            cx.notify();
+            return;
+        }
         let mut units: Vec<_> = self.marked.encode_utf16().collect();
         let range = range.unwrap_or(0..units.len());
         let start = range.start.min(units.len());
@@ -1554,6 +1792,12 @@ impl EntityInputHandler for Gui {
         _: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
+        if self.find.is_some() {
+            return Some(Bounds::new(
+                point((self.bounds.right() - px(420.)).max(px(8.)), px(36.)),
+                size(px(200.), px(32.)),
+            ));
+        }
         let (x, y) = self.tabs.get(&self.active)?.cursor?;
         Some(Bounds::new(
             self.bounds.origin + point(self.cell.width * x as f32, self.cell.height * y as f32),
