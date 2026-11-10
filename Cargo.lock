@@ -5002,6 +5002,7 @@ name = "scytty"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-channel 2.5.0",
  "fontdb 0.24.0",
  "ghostty-vt",
  "gpui",

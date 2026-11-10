@@ -30,11 +30,12 @@ mod platform;
 mod reconnect;
 mod remote;
 mod scrollbar;
+mod terminal_paint;
 mod transport;
 mod window_state;
 use config::Config;
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct Cell {
     x: usize,
     y: usize,
@@ -48,6 +49,7 @@ struct Tab {
     render: RenderState,
     images: images::Images,
     cells: Vec<Cell>,
+    paint_cache: terminal_paint::Cache,
     cursor: Option<(u16, u16)>,
     hold_since: Option<Instant>,
     encoder: key::Encoder,
@@ -65,6 +67,7 @@ impl Tab {
             render: RenderState::new()?,
             images: Default::default(),
             cells: vec![],
+            paint_cache: Default::default(),
             cursor: None,
             hold_since: None,
             encoder: key::Encoder::new()?,
@@ -96,12 +99,33 @@ impl Tab {
             return Ok(());
         }
         let snapshot = self.render.update(&self.terminal)?;
+        self.cursor = if snapshot.cursor_visible()? {
+            snapshot.cursor_viewport()?.map(|p| (p.x, p.y))
+        } else {
+            None
+        };
+        let cols = usize::from(snapshot.cols()?);
+        let rows_count = usize::from(snapshot.rows()?);
+        let full = snapshot.dirty()? == ghostty_vt::render::Dirty::Full
+            || self
+                .cells
+                .last()
+                .is_none_or(|c| c.x + 1 != cols || c.y + 1 != rows_count);
+        if !full && snapshot.dirty()? == ghostty_vt::render::Dirty::Clean {
+            return Ok(());
+        }
         let mut rows = RowIterator::new()?;
         let mut cells = CellIterator::new()?;
         let mut rows = rows.update(&snapshot)?;
-        self.cells.clear();
+        if full {
+            self.cells.clear();
+        }
         let mut y = 0;
         while let Some(row) = rows.next() {
+            if !full && !row.dirty()? {
+                y += 1;
+                continue;
+            }
             let mut cells = cells.update(row)?;
             let mut x = 0;
             while let Some(cell) = cells.next() {
@@ -127,23 +151,23 @@ impl Tab {
                 if style.invisible {
                     text.clear();
                 }
-                self.cells.push(Cell {
+                let cell = Cell {
                     x,
                     y,
                     text,
                     fg,
                     bg: (background.is_some() || style.inverse || selected).then_some(bg),
                     narrow: cell.raw_cell()?.wide()? == ghostty_vt::screen::CellWide::Narrow,
-                });
+                };
+                if full {
+                    self.cells.push(cell);
+                } else {
+                    self.cells[y * cols + x] = cell;
+                }
                 x += 1;
             }
             y += 1;
         }
-        self.cursor = if snapshot.cursor_visible()? {
-            snapshot.cursor_viewport()?.map(|p| (p.x, p.y))
-        } else {
-            None
-        };
         snapshot.clean()?;
         Ok(())
     }
@@ -165,6 +189,7 @@ struct Connected {
     connection: transport::Connection,
     writer: Stream,
     updates: Receiver<Result<Update>>,
+    wakeups: async_channel::Receiver<()>,
 }
 
 struct Gui {
@@ -182,7 +207,6 @@ struct Gui {
     reconnect: Option<reconnect::Reconnect>,
     writer: Option<Stream>,
     updates: Option<Receiver<Result<Update>>>,
-    pending: Option<Result<Update>>,
     window_bounds: Option<WindowBounds>,
     tabs: HashMap<u64, Tab>,
     order: Vec<TabInfo>,
@@ -228,7 +252,6 @@ impl Gui {
             reconnect: None,
             writer: None,
             updates: None,
-            pending: None,
             window_bounds: None,
             tabs: HashMap::new(),
             order: vec![],
@@ -252,12 +275,8 @@ impl Gui {
             view.start_connect(None, cx);
         }
         cx.spawn(async move |view, cx| {
-            let mut last_status = Instant::now();
             loop {
-                cx.background_executor()
-                    .timer(Duration::from_millis(16))
-                    .await;
-                // shortcut: poll the blocking transport every 16ms; use async wakeups if profiling warrants it.
+                cx.background_executor().timer(Duration::from_secs(1)).await;
                 if view
                     .update(cx, |view, cx| {
                         if view.error.is_some() {
@@ -270,23 +289,7 @@ impl Gui {
                         {
                             view.start_connect(None, cx);
                         }
-                        if view.pending.is_none()
-                            && let Some(rx) = &view.updates
-                        {
-                            view.pending = match rx.try_recv() {
-                                Ok(update) => Some(update),
-                                Err(mpsc::TryRecvError::Empty) => None,
-                                Err(_) => Some(Err(std::io::Error::from(
-                                    std::io::ErrorKind::UnexpectedEof,
-                                )
-                                .into())),
-                            };
-                        }
-                        if view.pending.is_some() || last_status.elapsed() >= Duration::from_secs(1)
-                        {
-                            last_status = Instant::now();
-                            cx.notify();
-                        }
+                        cx.notify();
                     })
                     .is_err()
                 {
@@ -301,7 +304,6 @@ impl Gui {
         self.connecting = true;
         self.error = None;
         self.remote_restart = None;
-        self.pending = None;
         self.updates = None;
         self.writer = None;
         self.connection = None;
@@ -322,6 +324,16 @@ impl Gui {
                         view.connection = Some(connected.connection);
                         view.writer = Some(connected.writer);
                         view.updates = Some(connected.updates);
+                        let wakeups = connected.wakeups;
+                        cx.spawn(async move |view, cx| {
+                            loop {
+                                let closed = wakeups.recv().await.is_err();
+                                if view.update(cx, |_, cx| cx.notify()).is_err() || closed {
+                                    break;
+                                }
+                            }
+                        })
+                        .detach();
                     }
                     Err(error) => {
                         if view.reconnect.is_some()
@@ -377,11 +389,16 @@ impl Gui {
         protocol::send(&mut writer, &Request::Attach { session, bin })?;
         let mut reader = writer.try_clone()?;
         let (tx, updates) = mpsc::sync_channel(256);
+        let (wake, wakeups) = async_channel::bounded(1);
         thread::spawn(move || {
             loop {
                 let update = protocol::receive(&mut reader).context("Server connection closed or sent an incomplete frame; check SSH output and ~/.scytty/server.log on the server");
                 let failed = update.is_err();
-                if tx.send(update).is_err() || failed {
+                if tx.send(update).is_err() {
+                    break;
+                }
+                let _ = wake.try_send(());
+                if failed {
                     break;
                 }
             }
@@ -390,6 +407,7 @@ impl Gui {
             connection,
             writer,
             updates,
+            wakeups,
         })
     }
     fn request(&mut self, request: Request) -> Result<()> {
@@ -435,7 +453,6 @@ impl Gui {
     fn retry_connection(&mut self, cx: &mut Context<Self>) {
         self.connecting = true;
         self.error = None;
-        self.pending = None;
         self.updates = None;
         self.writer = None;
         self.connection = None;
@@ -468,7 +485,7 @@ impl Gui {
     fn drain(&mut self, window: &mut Window) -> Result<()> {
         for _ in 0..256 {
             let Some(rx) = &self.updates else { break };
-            let update = match self.pending.take().map(Ok).unwrap_or_else(|| rx.try_recv()) {
+            let update = match rx.try_recv() {
                 Ok(update) => update?,
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(_) => {
@@ -863,72 +880,31 @@ impl Gui {
         } else {
             0..0
         };
+        tab.paint_cache.prepare(
+            &tab.cells,
+            &font,
+            font_size,
+            cell,
+            self.config.icon_scale,
+            window,
+        );
         let images = tab.images.prepare(&tab.terminal, bounds, cell)?;
         window.with_content_mask(Some(ContentMask { bounds }), |window| -> Result<()> {
             for image in images.iter().filter(|i| i.z < i32::MIN / 2) {
                 image.paint(window)?;
             }
-            for c in &tab.cells {
-                if let Some(bg) = c.bg {
-                    window.paint_quad(fill(
-                        Bounds::new(
-                            bounds.origin
-                                + point(cell.width * c.x as f32, cell.height * c.y as f32),
-                            cell,
-                        ),
-                        bg,
-                    ));
-                }
-            }
+            tab.paint_cache.backgrounds(bounds.origin, cell, window);
             for image in images.iter().filter(|i| i.z < 0 && i.z >= i32::MIN / 2) {
                 image.paint(window)?;
             }
-            for (i, c) in tab.cells.iter().enumerate() {
-                if c.text.is_empty() || c.text == " " {
-                    continue;
-                }
-                let expand = c.narrow
-                    && tab.cells.get(i + 1).is_some_and(|next| {
-                        next.y == c.y && next.narrow && expand_nerd_icon(&c.text, &next.text)
-                    });
-                let scale = if expand { self.config.icon_scale } else { 1. };
-                let origin =
-                    bounds.origin + point(cell.width * c.x as f32, cell.height * c.y as f32);
-                let run = TextRun {
-                    len: c.text.len(),
-                    font: font.clone(),
-                    color: c.fg.into(),
-                    background_color: None,
-                    underline: None,
-                    strikethrough: None,
-                };
-                let line = window.text_system().shape_line(
-                    c.text.clone().into(),
-                    font_size * scale,
-                    &[run],
-                    None,
-                );
-                let icon_bounds = Bounds::new(origin, size(cell.width * 2., cell.height));
-                let origin = if expand {
-                    origin
-                        + point(
-                            (cell.width * 2. - line.width) / 2.,
-                            (cell.height - font_size * scale) / 2.,
-                        )
-                } else {
-                    origin
-                };
-                if expand {
-                    window.with_content_mask(
-                        Some(ContentMask {
-                            bounds: icon_bounds,
-                        }),
-                        |window| line.paint(origin, cell.height, window, cx),
-                    )?;
-                } else {
-                    line.paint(origin, cell.height, window, cx)?;
-                }
-            }
+            tab.paint_cache.text(
+                bounds.origin,
+                cell,
+                font_size,
+                self.config.icon_scale,
+                window,
+                cx,
+            )?;
             for c in &tab.cells[hovered_cells] {
                 window.paint_quad(fill(
                     Bounds::new(
@@ -1929,6 +1905,83 @@ mod tests {
         }
         Ok(())
     }
+    #[test]
+    fn incremental_cells_match_full_rebuilds() -> Result<()> {
+        fn compare(tab: &mut Tab) -> Result<()> {
+            tab.snapshot()?;
+            let cells = tab.cells.clone();
+            let cursor = tab.cursor;
+            tab.render = RenderState::new()?;
+            tab.snapshot()?;
+            assert!(
+                tab.cells == cells,
+                "incremental cells differ from a full rebuild"
+            );
+            assert_eq!(tab.cursor, cursor);
+            Ok(())
+        }
+        let mut tab = Tab::new(Terminal::new(TerminalOptions {
+            cols: 12,
+            rows: 4,
+            ..Default::default()
+        })?)?;
+        for bytes in [
+            "first\r\nsecond\r\nthird\r\nfourth",
+            "\x1b[2;3Hé界\x1b[31mred\x1b[0m",
+            "\x1b[1;1H\x1b[7mX\x1b[0m",
+            "\r\nnew line\r\nmore history",
+            "\x1b[?25l",
+            "\x1b[?1049halternate",
+            "\x1b[?1049l\x1b[?25h",
+            "\x1b[2J",
+        ] {
+            tab.terminal.vt_write(bytes.as_bytes());
+            compare(&mut tab)?;
+        }
+        tab.terminal.scroll_viewport(ScrollViewport::Top);
+        compare(&mut tab)?;
+        let start = tab
+            .terminal
+            .grid_ref(TerminalPoint::Viewport(PointCoordinate { x: 0, y: 0 }))?;
+        let end = tab
+            .terminal
+            .grid_ref(TerminalPoint::Viewport(PointCoordinate { x: 5, y: 1 }))?;
+        tab.terminal
+            .set_selection(Some(&Selection::new(start, end, false)))?;
+        compare(&mut tab)?;
+        tab.terminal.set_selection(None)?;
+        compare(&mut tab)?;
+        // Same cell count, different geometry must invalidate the whole cache.
+        resize_terminal(&mut tab.terminal, 8, 6, 80, 120)?;
+        compare(&mut tab)?;
+        compare(&mut tab)?;
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "manual snapshot timing; run with --ignored --nocapture"]
+    fn snapshot_timing() -> Result<()> {
+        let mut tab = Tab::new(Terminal::new(TerminalOptions {
+            cols: 120,
+            rows: 40,
+            ..Default::default()
+        })?)?;
+        tab.terminal.vt_write(&b"abcdef ".repeat(600));
+        tab.snapshot()?;
+        let start = Instant::now();
+        for _ in 0..500 {
+            tab.snapshot()?;
+        }
+        eprintln!("500 idle snapshots: {:?}", start.elapsed());
+        let start = Instant::now();
+        for _ in 0..500 {
+            tab.terminal.vt_write(b"\x1b[1;1HX");
+            tab.snapshot()?;
+        }
+        eprintln!("500 single-row snapshots: {:?}", start.elapsed());
+        Ok(())
+    }
+
     #[test]
     fn selection_and_snapshot() -> Result<()> {
         let mut terminal = Terminal::new(TerminalOptions {

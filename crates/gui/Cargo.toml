@@ -7,6 +7,7 @@ default-run = "scytty"
 [dependencies]
 mlua.workspace = true
 anyhow.workspace = true
+async-channel.workspace = true
 fontdb.workspace = true
 ghostty-vt.workspace = true
 scytty-common.workspace = true

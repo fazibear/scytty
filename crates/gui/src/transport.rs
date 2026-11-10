@@ -104,6 +104,8 @@ mod tests {
         assert!(
             matches!(connected.updates.recv_timeout(Duration::from_secs(5))??, Update::Error(message) if message == "attach rejected")
         );
+        // The UI receives a wakeup without waiting for a polling timer.
+        connected.wakeups.recv_blocking()?;
         peer.join().expect("protocol peer panicked")?;
         Ok(())
     }
