@@ -5003,6 +5003,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-channel 2.5.0",
+ "cocoa 0.26.0",
  "fontdb 0.24.0",
  "ghostty-vt",
  "gpui",
@@ -5010,8 +5011,10 @@ dependencies = [
  "mlua",
  "notify-rust",
  "objc",
+ "raw-window-handle",
  "scytty-common",
  "sha2 0.11.1",
+ "windows 0.61.3",
  "winresource",
 ]
 

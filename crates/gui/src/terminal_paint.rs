@@ -1,4 +1,5 @@
 use crate::{Cell, expand_nerd_icon};
+use ghostty_vt::style::Underline;
 use gpui::{
     App, Bounds, ContentMask, Font, Pixels, Point, Rgba, ShapedLine, Size, TextRun, Window, fill,
     point, px, size,
@@ -59,6 +60,29 @@ fn backgrounds(cells: &[Cell], output: &mut Vec<(usize, usize, Rgba)>) {
                 output.push((c.x, 1, bg));
             }
         }
+    }
+}
+
+// Rectangles are (horizontal offset, width, vertical offset from the bottom line).
+fn underline_segments(
+    style: Underline,
+    width: Pixels,
+    thickness: Pixels,
+) -> Vec<(Pixels, Pixels, Pixels)> {
+    match style {
+        Underline::None | Underline::Curly => vec![],
+        Underline::Double => vec![(px(0.), width, px(0.)), (px(0.), width, thickness * -2.)],
+        Underline::Dotted | Underline::Dashed => {
+            let length = thickness * if style == Underline::Dotted { 1. } else { 3. };
+            let mut segments = Vec::new();
+            let mut x = px(0.);
+            while x < width {
+                segments.push((x, length.min(width - x), px(0.)));
+                x += length + thickness;
+            }
+            segments
+        }
+        _ => vec![(px(0.), width, px(0.))],
     }
 }
 
@@ -200,6 +224,42 @@ impl Cache {
                     text.line.paint(origin, cell.height, window, cx)?;
                 }
             }
+            // Decorate the grid, not glyph widths: spaces and wide-cell padding count too.
+            let thickness = px((f32::from(font_size) * window.scale_factor() / 14.)
+                .round()
+                .max(1.)
+                / window.scale_factor());
+            for c in &row.cells {
+                let origin = origin + point(cell.width * c.x as f32, cell.height * y as f32);
+                let underline_y = cell.height - thickness * 2.;
+                if c.underline == Underline::Curly {
+                    window.paint_underline(
+                        origin + point(px(0.), cell.height - thickness * 4.),
+                        cell.width,
+                        &gpui::UnderlineStyle {
+                            thickness,
+                            color: Some(c.underline_color.into()),
+                            wavy: true,
+                        },
+                    );
+                } else if c.underline != Underline::None {
+                    for (x, width, y) in underline_segments(c.underline, cell.width, thickness) {
+                        window.paint_quad(fill(
+                            Bounds::new(origin + point(x, underline_y + y), size(width, thickness)),
+                            c.underline_color,
+                        ));
+                    }
+                }
+                if c.strikethrough {
+                    window.paint_quad(fill(
+                        Bounds::new(
+                            origin + point(px(0.), cell.height * 0.55),
+                            size(cell.width, thickness),
+                        ),
+                        c.fg,
+                    ));
+                }
+            }
         }
         Ok(())
     }
@@ -217,6 +277,31 @@ mod tests {
             fg: rgb(0xffffff),
             bg: None,
             narrow: true,
+            underline: Underline::None,
+            underline_color: rgb(0xffffff),
+            strikethrough: false,
+        }
+    }
+    #[test]
+    fn underline_patterns_cover_and_stay_within_the_cell() {
+        assert!(underline_segments(Underline::None, px(7.), px(1.)).is_empty());
+        assert_eq!(
+            underline_segments(Underline::Single, px(7.), px(1.)),
+            vec![(px(0.), px(7.), px(0.))]
+        );
+        assert_eq!(
+            underline_segments(Underline::Double, px(7.), px(1.)).len(),
+            2
+        );
+        for style in [Underline::Dotted, Underline::Dashed] {
+            let segments = underline_segments(style, px(7.5), px(1.));
+            assert_eq!(segments[0].0, px(0.));
+            assert!(
+                segments
+                    .iter()
+                    .all(|&(x, width, _)| width > px(0.) && x + width <= px(7.5))
+            );
+            assert!(segments.windows(2).all(|s| s[0].0 + s[0].1 < s[1].0));
         }
     }
     #[test]

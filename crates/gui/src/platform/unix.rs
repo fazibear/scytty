@@ -4,6 +4,15 @@ use std::process::Command;
 
 pub const OVERLAY_SCROLLBAR: bool = false;
 
+pub fn set_progress(
+    _progress: Option<&scytty_common::protocol::Progress>,
+    _window: &Window,
+) -> Result<()> {
+    Ok(())
+}
+pub fn clear_progress(_window: WindowId) {}
+pub fn tick_progress(_window: WindowId) {}
+
 pub fn init_notifications() -> Result<()> {
     Ok(())
 }

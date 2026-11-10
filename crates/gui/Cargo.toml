@@ -17,6 +17,11 @@ notify-rust.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc.workspace = true
+cocoa.workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows.workspace = true
+raw-window-handle.workspace = true
 
 [build-dependencies]
 sha2.workspace = true

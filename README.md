@@ -178,8 +178,13 @@ Progress uses OSC 9;4 and is exposed to the same callbacks as `ctx.progress`:
 `nil` when cleared, otherwise `{state = "normal", percent = 42}`. States are
 `normal`, `error`, `indeterminate`, and `paused`; `percent` is nil when omitted.
 Status callbacks receive the active tab's progress; `format_tab` receives its
-own tab's progress. It survives detach/reattach, including over SSH. Display is
-opt-in, for example:
+own tab's progress. It survives detach/reattach, including over SSH. The active
+tab also updates native icon progress automatically: each Windows window's taskbar
+button, or the macOS Dock icon for the most recently focused window. Switching
+tabs, clearing progress, disconnecting, or closing the window clears stale progress.
+Windows shows native normal/error/paused/indeterminate states; macOS uses a standard
+Dock progress bar (including indeterminate), without distinct error/paused colors.
+Lua status text remains opt-in, for example:
 
 ```lua
 right_status = function(ctx)
@@ -275,6 +280,10 @@ printf '\033]5522;type=write\033\\'
 printf '\033]5522;type=wdata:mime=dGV4dC9wbGFpbg==;aGVsbG8=\033\\'
 printf '\033]5522;type=wdata\033\\'
 ```
+
+ANSI underline (single, double, curly, dotted and dashed) and strikethrough are
+rendered across the terminal cell grid, including spaces and wide characters.
+Underline colors support SGR 58 (palette or RGB); SGR 59 restores the text color.
 
 Applications can change the terminal's default foreground/background/cursor colors
 with OSC 10/11/12 and reset them with OSC 110/111/112. Background opacity still

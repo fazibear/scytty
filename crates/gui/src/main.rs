@@ -47,6 +47,9 @@ struct Cell {
     fg: Rgba,
     bg: Option<Rgba>,
     narrow: bool,
+    underline: ghostty_vt::style::Underline,
+    underline_color: Rgba,
+    strikethrough: bool,
 }
 struct Tab {
     terminal: Terminal,
@@ -195,6 +198,23 @@ impl Tab {
                     fg,
                     bg: (background.is_some() || style.inverse || selected).then_some(bg),
                     narrow: cell.raw_cell()?.wide()? == ghostty_vt::screen::CellWide::Narrow,
+                    underline: if style.invisible {
+                        ghostty_vt::style::Underline::None
+                    } else {
+                        style.underline
+                    },
+                    underline_color: if selected {
+                        fg
+                    } else {
+                        match style.underline_color {
+                            ghostty_vt::style::StyleColor::None => fg,
+                            ghostty_vt::style::StyleColor::Rgb(value) => color(Some(value), fg),
+                            ghostty_vt::style::StyleColor::Palette(index) => {
+                                color(Some(colors.palette[usize::from(index.0)]), fg)
+                            }
+                        }
+                    },
+                    strikethrough: style.strikethrough && !style.invisible,
                 };
                 if full {
                     self.cells.push(cell);
@@ -208,6 +228,19 @@ impl Tab {
         snapshot.clean()?;
         Ok(true)
     }
+}
+
+fn active_progress(tabs: &[TabInfo], active: u64) -> Option<scytty_common::protocol::Progress> {
+    let tab = tabs.iter().find(|tab| tab.id == active && !tab.exited)?;
+    let mut progress = tab.progress.clone()?;
+    if !matches!(
+        progress.state.as_str(),
+        "normal" | "error" | "paused" | "indeterminate"
+    ) {
+        return None;
+    }
+    progress.percent = progress.percent.map(|percent| percent.min(100));
+    Some(progress)
 }
 
 fn message_line_rows(line: &str, breaks: impl Iterator<Item = usize>) -> Vec<String> {
@@ -248,6 +281,7 @@ struct Gui {
     tabs: HashMap<u64, Tab>,
     order: Vec<TabInfo>,
     active: u64,
+    native_progress: Option<scytty_common::protocol::Progress>,
     error: Option<String>,
     remote_restart: Option<remote::RestartRequired>,
     focus: FocusHandle,
@@ -279,6 +313,7 @@ impl Gui {
         config.font_family = font.unwrap_or_else(|_| "monospace".into());
         let mut view = Self {
             window_handle,
+            native_progress: None,
             initial_font_size: config.font_size,
             config,
             session,
@@ -321,6 +356,7 @@ impl Gui {
                 cx.background_executor().timer(Duration::from_secs(1)).await;
                 if view
                     .update(cx, |view, cx| {
+                        platform::tick_progress(view.window_handle.window_id());
                         if view.error.is_some() {
                             return;
                         }
@@ -523,8 +559,37 @@ impl Gui {
         }
         cx.notify();
     }
+    fn update_native_progress(&mut self, window: &Window, force: bool) {
+        let progress = if self.connecting || self.error.is_some() {
+            None
+        } else {
+            active_progress(&self.order, self.active)
+        };
+        if force || self.native_progress != progress {
+            self.native_progress = progress;
+            if let Err(error) = platform::set_progress(self.native_progress.as_ref(), window) {
+                eprintln!("Native progress: {error:#}");
+            }
+        }
+    }
+    fn clear_native_progress(&mut self, cx: &mut Context<Self>) {
+        if self.native_progress.take().is_some() {
+            // Receive failures can be reported inside an existing window update.
+            let view = cx.weak_entity();
+            cx.defer(move |cx| {
+                let _ = view.update(cx, |view, cx| {
+                    if view.native_progress.is_none() {
+                        let _ = view
+                            .window_handle
+                            .update(cx, |_, window, _| platform::set_progress(None, window));
+                    }
+                });
+            });
+        }
+    }
     fn report(&mut self, result: Result<()>, cx: &mut Context<Self>) {
         if let Err(e) = result {
+            self.clear_native_progress(cx);
             if self.has_connected
                 && reconnect::transport_error(&e)
                 && e.downcast_ref::<remote::RestartRequired>().is_none()
@@ -565,6 +630,7 @@ impl Gui {
                         self.request(Request::SetScrollback {
                             megabytes: self.config.scrollback_mb,
                         })?;
+                        self.update_native_progress(window, false);
                     }
                 }
                 Update::Output { id, bytes } => {
@@ -618,6 +684,7 @@ impl Gui {
                     )?);
                     self.order = tabs;
                     self.active = active;
+                    self.update_native_progress(window, false);
                 }
                 Update::Error(message) => anyhow::bail!(message),
             }
@@ -992,7 +1059,11 @@ impl Gui {
         let font_id = window.text_system().resolve_font(&font);
         self.cell = size(
             window.text_system().advance(font_id, font_size, 'M')?.width,
-            px(self.config.font_size * 1.25),
+            terminal_cell_height(
+                window.text_system().ascent(font_id, font_size),
+                window.text_system().descent(font_id, font_size),
+                window.scale_factor(),
+            ),
         );
         let Some(tab) = self.tabs.get_mut(&self.active) else {
             return Ok(());
@@ -1935,6 +2006,7 @@ impl EntityInputHandler for Gui {
 }
 impl Drop for Gui {
     fn drop(&mut self) {
+        platform::clear_progress(self.window_handle.window_id());
         if let Some(bounds) = self.window_bounds
             && let Err(e) = window_state::save(bounds)
         {
@@ -1966,6 +2038,12 @@ fn scroll_rows(remainder: &mut f32, delta: f32) -> isize {
     let rows = remainder.trunc() as isize;
     *remainder -= rows as f32;
     rows
+}
+
+fn terminal_cell_height(ascent: Pixels, descent: Pixels, scale: f32) -> Pixels {
+    // Font metrics use a negative descent on macOS; never subtract descender space.
+    let height = ascent + descent.abs();
+    px((f32::from(height) * scale).floor().max(1.) / scale)
 }
 
 fn hold_frame(terminal: &Terminal, since: &mut Option<Instant>) -> Result<bool> {
@@ -2124,6 +2202,14 @@ fn open_window(
     };
     cx.open_window(options, |window, cx| {
         let view = cx.new(|cx| Gui::new(config, session, host, bin, window.window_handle(), cx));
+        view.update(cx, |_, cx| {
+            cx.observe_window_activation(window, |view, window, _| {
+                if window.is_window_active() {
+                    view.update_native_progress(window, true);
+                }
+            })
+            .detach();
+        });
         view.read(cx).focus.focus(window);
         view
     })?;
@@ -2166,6 +2252,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn native_progress_follows_live_active_tab_and_validates_percent() {
+        let mut tabs = vec![
+            TabInfo {
+                id: 1,
+                progress: Some(scytty_common::protocol::Progress {
+                    state: "normal".into(),
+                    percent: Some(42),
+                }),
+                ..Default::default()
+            },
+            TabInfo {
+                id: 2,
+                ..Default::default()
+            },
+        ];
+        assert_eq!(active_progress(&tabs, 1).unwrap().percent, Some(42));
+        assert!(active_progress(&tabs, 2).is_none());
+        assert!(active_progress(&tabs, 99).is_none());
+        tabs[0].progress.as_mut().unwrap().percent = Some(255);
+        assert_eq!(active_progress(&tabs, 1).unwrap().percent, Some(100));
+        tabs[0].exited = true;
+        assert!(active_progress(&tabs, 1).is_none());
+        tabs[0].exited = false;
+        tabs[0].progress.as_mut().unwrap().state = "invalid".into();
+        assert!(active_progress(&tabs, 1).is_none());
+    }
+    #[test]
     fn message_rows_preserve_unicode_and_blank_lines() {
         assert_eq!(
             message_line_rows("hello 世界", [6].into_iter()),
@@ -2187,6 +2300,48 @@ mod tests {
 
     use core::prelude::v1::test;
     use ghostty_vt::TerminalOptions;
+    #[test]
+    fn terminal_decorations_include_spaces_wide_cells_colors_and_resets() -> Result<()> {
+        use ghostty_vt::style::Underline;
+        let mut tab = Tab::new(Terminal::new(TerminalOptions::default())?)?;
+        tab.terminal.vt_write("\x1b[4;9mA 界\x1b[0mB\r\n\x1b[4:2mD\x1b[4:3mC\x1b[4:4mP\x1b[4:5mH\x1b[24;29mN\r\n\x1b[4;58;2;12;34;56mX\x1b[58;5;1mY\x1b[59mZ\x1b[8;9mI".as_bytes());
+        tab.snapshot()?;
+        for c in &tab.cells[..4] {
+            assert_eq!(c.underline, Underline::Single);
+            assert!(c.strikethrough);
+        }
+        assert_eq!(tab.cells[4].underline, Underline::None);
+        assert!(!tab.cells[4].strikethrough);
+        let row: Vec<_> = tab
+            .cells
+            .iter()
+            .filter(|c| c.y == 1)
+            .take(5)
+            .map(|c| c.underline)
+            .collect();
+        assert_eq!(
+            row,
+            [
+                Underline::Double,
+                Underline::Curly,
+                Underline::Dotted,
+                Underline::Dashed,
+                Underline::None
+            ]
+        );
+        let row: Vec<_> = tab.cells.iter().filter(|c| c.y == 2).take(4).collect();
+        assert_eq!(row[0].underline_color, rgb(0x0c2238));
+        assert_ne!(row[1].underline_color, row[0].underline_color);
+        assert_eq!(row[2].underline_color, row[2].fg);
+        assert_eq!(row[3].underline, Underline::None);
+        assert!(!row[3].strikethrough);
+        let mut bytes = Vec::new();
+        ghostty_vt::snapshot::encode_to(&tab.terminal, &mut bytes)?;
+        let mut restored = Tab::new(ghostty_vt::snapshot::Decoder::from_slice(&bytes).decode()?)?;
+        restored.snapshot()?;
+        assert!(tab.cells == restored.cells);
+        Ok(())
+    }
     #[test]
     fn key_encoding_and_sync_redraw() -> Result<()> {
         let mut terminal = Terminal::new(TerminalOptions::default())?;
@@ -2484,6 +2639,29 @@ mod tests {
         );
     }
 
+    #[test]
+    fn row_height_preserves_descenders_and_joins_full_height_glyphs() {
+        // FiraCode: 1950 units/em, ascent 1800, descent -600 (font-kit/CoreText).
+        for font_size in [6., 9., 10., 11., 12., 16., 24.] {
+            let ascent = px(font_size * 1800. / 1950.);
+            let descent = px(font_size * 600. / 1950.);
+            let natural = f32::from(ascent + descent);
+            for scale in [1., 1.25, 1.5, 2.] {
+                let height = terminal_cell_height(ascent, -descent, scale);
+                assert_eq!(height, terminal_cell_height(ascent, descent, scale));
+                let height = f32::from(height);
+                assert!(height > font_size);
+                assert!(height <= natural);
+                assert!(natural - height < 1.001 / scale);
+                let physical = height * scale;
+                assert!((physical - physical.round()).abs() < 0.001);
+            }
+        }
+        assert_eq!(
+            terminal_cell_height(px(1800. * 16. / 1950.), px(-600. * 16. / 1950.), 2.),
+            px(19.5)
+        );
+    }
     #[test]
     fn fractional_trackpad_scroll_accumulates() {
         let mut remainder = 0.;

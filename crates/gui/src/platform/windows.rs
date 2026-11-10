@@ -4,6 +4,62 @@ use std::{os::windows::process::CommandExt, process::Command};
 
 pub const OVERLAY_SCROLLBAR: bool = true;
 
+pub fn set_progress(
+    progress: Option<&scytty_common::protocol::Progress>,
+    window: &Window,
+) -> Result<()> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::{
+        Foundation::HWND,
+        System::Com::{
+            CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
+            CoUninitialize,
+        },
+        UI::Shell::{
+            ITaskbarList3, TBPF_ERROR, TBPF_INDETERMINATE, TBPF_NOPROGRESS, TBPF_NORMAL,
+            TBPF_PAUSED, TaskbarList,
+        },
+    };
+    let RawWindowHandle::Win32(handle) = HasWindowHandle::window_handle(window)?.as_raw() else {
+        anyhow::bail!("Window has no HWND")
+    };
+    let hwnd = HWND(handle.hwnd.get() as *mut std::ffi::c_void);
+    unsafe {
+        let initialized = CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok();
+        let result = (|| -> Result<()> {
+            let taskbar: ITaskbarList3 =
+                CoCreateInstance(&TaskbarList, None, CLSCTX_INPROC_SERVER)?;
+            taskbar.HrInit()?;
+            let state = match progress.map(|p| p.state.as_str()) {
+                Some("normal") => TBPF_NORMAL,
+                Some("error") => TBPF_ERROR,
+                Some("paused") => TBPF_PAUSED,
+                Some("indeterminate") => TBPF_INDETERMINATE,
+                _ => TBPF_NOPROGRESS,
+            };
+            if let Some(progress) = progress
+                && state != TBPF_NOPROGRESS
+                && state != TBPF_INDETERMINATE
+            {
+                taskbar.SetProgressValue(
+                    hwnd,
+                    u64::from(progress.percent.unwrap_or(0).min(100)),
+                    100,
+                )?;
+            }
+            taskbar.SetProgressState(hwnd, state)?;
+            Ok(())
+        })();
+        if initialized {
+            CoUninitialize();
+        }
+        result
+    }
+}
+
+pub fn clear_progress(_window: WindowId) {}
+pub fn tick_progress(_window: WindowId) {}
+
 pub fn init_notifications() -> Result<()> {
     // Unpackaged Windows apps need an identity registered for toast delivery.
     let mut command = Command::new("reg.exe");
