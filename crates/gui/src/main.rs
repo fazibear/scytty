@@ -251,6 +251,7 @@ struct Gui {
     error: Option<String>,
     remote_restart: Option<remote::RestartRequired>,
     focus: FocusHandle,
+    window_handle: AnyWindowHandle,
     bounds: Bounds<Pixels>,
     cell: Size<Pixels>,
     find: Option<find::Find>,
@@ -270,12 +271,14 @@ impl Gui {
         session: String,
         host: Option<String>,
         bin: Option<String>,
+        window_handle: AnyWindowHandle,
         cx: &mut Context<Self>,
     ) -> Self {
         let font = fonts::resolve(&config.font_family);
         let error = font.as_ref().err().map(|e| format!("{e:#}"));
         config.font_family = font.unwrap_or_else(|_| "monospace".into());
         let mut view = Self {
+            window_handle,
             initial_font_size: config.font_size,
             config,
             session,
@@ -364,10 +367,21 @@ impl Gui {
                         view.writer = Some(connected.writer);
                         view.updates = Some(connected.updates);
                         let wakeups = connected.wakeups;
+                        let window_handle = view.window_handle;
                         cx.spawn(async move |view, cx| {
                             loop {
                                 let closed = wakeups.recv().await.is_err();
-                                if view.update(cx, |_, cx| cx.notify()).is_err() || closed {
+                                let result = window_handle.update(cx, |_, window, cx| {
+                                    view.update(cx, |view, cx| {
+                                        // Hidden windows may not render; never tie socket reads to paint.
+                                        if view.error.is_none() {
+                                            let result = view.drain(window, cx);
+                                            view.report(result, cx);
+                                        }
+                                        cx.notify();
+                                    })
+                                });
+                                if result.and_then(|result| result).is_err() || closed {
                                     break;
                                 }
                             }
@@ -1389,11 +1403,6 @@ impl Gui {
 impl Render for Gui {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.window_bounds = Some(window.window_bounds());
-        if self.error.is_none()
-            && let Err(e) = self.drain(window, cx)
-        {
-            self.report(Err(e), cx);
-        }
         let mut root = div()
             .relative()
             .on_mouse_down(
@@ -2114,7 +2123,7 @@ fn open_window(
         ..Default::default()
     };
     cx.open_window(options, |window, cx| {
-        let view = cx.new(|cx| Gui::new(config, session, host, bin, cx));
+        let view = cx.new(|cx| Gui::new(config, session, host, bin, window.window_handle(), cx));
         view.read(cx).focus.focus(window);
         view
     })?;
