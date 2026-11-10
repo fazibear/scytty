@@ -226,12 +226,17 @@ return {
   plus_menu = {
     { label = "New tab", action = "new_tab" },
     { label = "New window", action = "new_window" },
+    { label = "Reload config", action = "reload_config" },
     { label = "Production", action = "connect", host = "user@server", session = "work", bin = "/usr/bin/fish" },
   },
 }
 ```
 
-The default menu contains New tab and New window; `plus_menu = {}` disables it.
+The default menu contains New tab, New window and Reload config; `plus_menu = {}`
+disables it. Reload config re-reads Lua and its modules for the current window,
+applying font, opacity, status, menu and scrollback settings without reconnecting.
+Invalid config keeps the previous settings. Window dimensions apply only to new
+windows. Lowering the scrollback limit may discard older history.
 New window creates a fresh session on the current host. Connect opens a separate
 window; its session defaults to `default`. An already-attached session still
 requires closing its existing window first. Optional `bin` selects an executable

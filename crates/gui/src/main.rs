@@ -628,7 +628,7 @@ impl Gui {
                     let action = self.config.plus_menu[self.plus_menu_selected]
                         .action
                         .clone();
-                    let result = self.menu_action(&action, cx);
+                    let result = self.menu_action(&action, window, cx);
                     self.report(result, cx);
                 }
                 _ => {}
@@ -1186,10 +1186,46 @@ impl Gui {
         }
         Ok(line)
     }
-    fn menu_action(&mut self, action: &config::MenuAction, cx: &mut Context<Self>) -> Result<()> {
+    fn menu_action(
+        &mut self,
+        action: &config::MenuAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<()> {
         self.plus_menu_position = None;
         match action {
             config::MenuAction::NewTab => self.request(Request::NewTab),
+            config::MenuAction::ReloadConfig => {
+                let mut config = Config::load()?;
+                config.font_family = fonts::resolve(&config.font_family)?;
+                let title = self
+                    .order
+                    .iter()
+                    .enumerate()
+                    .find(|(_, tab)| tab.id == self.active)
+                    .map_or_else(|| "scytty".into(), |(index, tab)| tab_title(index, tab));
+                let title = config.window_title(&self.session, &title, self.remote)?;
+                if config.scrollback_mb != self.config.scrollback_mb {
+                    if self.writer.is_some() && !self.connecting {
+                        self.request(Request::SetScrollback {
+                            megabytes: config.scrollback_mb,
+                        })?;
+                    }
+                    for tab in self.tabs.values_mut() {
+                        tab.terminal.set_scrollback_max_bytes(Some(
+                            usize::from(config.scrollback_mb) * 1024 * 1024,
+                        ))?;
+                    }
+                }
+                self.initial_font_size = config.font_size;
+                self.config = config;
+                window.set_window_title(&title);
+                if self.writer.is_some() && !self.connecting {
+                    self.error = None;
+                }
+                cx.notify();
+                Ok(())
+            }
             config::MenuAction::NewWindow => {
                 let session = format!(
                     "window-{}-{}",
@@ -1275,7 +1311,7 @@ impl Gui {
                     }))
                     .child(entry.label.clone())
                     .on_click(cx.listener(move |this, _, window, cx| {
-                        let result = this.menu_action(&action, cx);
+                        let result = this.menu_action(&action, window, cx);
                         this.focus.focus(window);
                         this.report(result, cx);
                     })),

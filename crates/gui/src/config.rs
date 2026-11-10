@@ -6,6 +6,7 @@ use std::path::PathBuf;
 pub enum MenuAction {
     NewTab,
     NewWindow,
+    ReloadConfig,
     Connect {
         host: String,
         session: String,
@@ -47,6 +48,10 @@ impl Default for Config {
                 MenuEntry {
                     label: "New window".into(),
                     action: MenuAction::NewWindow,
+                },
+                MenuEntry {
+                    label: "Reload config".into(),
+                    action: MenuAction::ReloadConfig,
                 },
             ],
             font_size: 16.0,
@@ -214,7 +219,7 @@ impl Config {
                         }
                         let name: String = entry.get("action")?;
                         let action = match name.as_str() {
-                            "new_tab" | "new_window" => {
+                            "new_tab" | "new_window" | "reload_config" => {
                                 if entry.contains_key("host")?
                                     || entry.contains_key("session")?
                                     || entry.contains_key("bin")?
@@ -223,8 +228,10 @@ impl Config {
                                 }
                                 if name == "new_tab" {
                                     MenuAction::NewTab
-                                } else {
+                                } else if name == "new_window" {
                                     MenuAction::NewWindow
+                                } else {
+                                    MenuAction::ReloadConfig
                                 }
                             }
                             "connect" => {
@@ -325,6 +332,24 @@ mod tests {
             matches!(&custom.plus_menu[0].action, MenuAction::Connect { bin: Some(bin), .. } if bin == "/usr/bin/fish")
         );
         assert!(Config::parse("return {plus_menu={}}")?.plus_menu.is_empty());
+        assert!(
+            Config::default()
+                .plus_menu
+                .iter()
+                .any(|entry| entry.action == MenuAction::ReloadConfig)
+        );
+        assert_eq!(
+            Config::parse("return {plus_menu={{label='Reload config',action='reload_config'}}}")?
+                .plus_menu[0]
+                .action,
+            MenuAction::ReloadConfig
+        );
+        assert!(
+            Config::parse(
+                "return {plus_menu={{label='Reload',action='reload_config',host='host'}}}"
+            )
+            .is_err()
+        );
         for source in [
             "return {plus_menu={{label='x',action='connect',host='host',bin=''}}}",
             "return {plus_menu={{label='x',action='connect',host='host',bin='bad\\nprogram'}}}",
