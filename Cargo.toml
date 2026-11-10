@@ -11,7 +11,6 @@ edition = "2024"
 anyhow = "1"
 async-channel = "2.5"
 base64 = "0.23"
-cocoa = "0.26"
 bincode = "1.3"
 flate2 = "1"
 fontdb = "0.24"
@@ -22,7 +21,9 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 libc = "0.2"
 mlua = { version = "0.12", features = ["luajit", "vendored", "error-send"] }
 notify-rust = "4.19"
-objc = "0.2"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSDockTile", "NSView", "NSResponder", "NSControl", "NSCell", "NSImage", "NSImageView", "NSProgressIndicator"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSGeometry"] }
 png = "0.18"
 portable-pty = "0.9"
 raw-window-handle = "0.6"
