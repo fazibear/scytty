@@ -52,6 +52,7 @@ struct Tab {
     terminal: Terminal,
     render: RenderState,
     images: images::Images,
+    placements: Vec<images::Placement>,
     cells: Vec<Cell>,
     paint_cache: terminal_paint::Cache,
     search: Option<ghostty_vt::search::Search>,
@@ -74,6 +75,7 @@ impl Tab {
             terminal,
             render: RenderState::new()?,
             images: Default::default(),
+            placements: Vec::new(),
             cells: vec![],
             paint_cache: Default::default(),
             search: None,
@@ -113,9 +115,16 @@ impl Tab {
         };
         Ok(color(background, rgb(0)))
     }
-    fn snapshot(&mut self) -> Result<()> {
+    fn prepare_frame(&mut self, bounds: Bounds<Pixels>, cell: Size<Pixels>) -> Result<()> {
+        if self.snapshot()? {
+            self.placements = self.images.prepare(&self.terminal, bounds, cell)?;
+        }
+        Ok(())
+    }
+    // Images must commit with text, even when only the image placements changed.
+    fn snapshot(&mut self) -> Result<bool> {
         if hold_frame(&self.terminal, &mut self.hold_since)? {
-            return Ok(());
+            return Ok(false);
         }
         let snapshot = self.render.update(&self.terminal)?;
         self.cursor = if snapshot.cursor_visible()? {
@@ -137,7 +146,7 @@ impl Tab {
                 .last()
                 .is_none_or(|c| c.x + 1 != cols || c.y + 1 != rows_count);
         if !full && snapshot.dirty()? == ghostty_vt::render::Dirty::Clean {
-            return Ok(());
+            return Ok(true);
         }
         let mut rows = RowIterator::new()?;
         let mut cells = CellIterator::new()?;
@@ -197,7 +206,7 @@ impl Tab {
             y += 1;
         }
         snapshot.clean()?;
-        Ok(())
+        Ok(true)
     }
 }
 
@@ -1022,7 +1031,7 @@ impl Gui {
         } else {
             vec![]
         };
-        tab.snapshot()?;
+        tab.prepare_frame(bounds, cell)?;
         let hovered_cells = if let Some(position) = self.link_hovered {
             links::hovered_cells(
                 tab,
@@ -1045,7 +1054,7 @@ impl Gui {
             self.config.icon_scale,
             window,
         );
-        let images = tab.images.prepare(&tab.terminal, bounds, cell)?;
+        let images = &tab.placements;
         window.with_content_mask(Some(ContentMask { bounds }), |window| -> Result<()> {
             for image in images.iter().filter(|i| i.z < i32::MIN / 2) {
                 image.paint(window)?;
