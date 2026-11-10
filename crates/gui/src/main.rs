@@ -617,8 +617,14 @@ impl Gui {
         );
         links::at_terminal(tab, point)
     }
-    fn mouse_up(&mut self, event: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn end_mouse_drag(&mut self) {
         self.scroll_drag = None;
+        for tab in self.tabs.values_mut() {
+            tab.anchor = None;
+        }
+    }
+    fn mouse_up(&mut self, event: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.end_mouse_drag();
         if let Some((start, url)) = self.link_press.take()
             && (event.position.x - start.x).abs() <= px(4.)
             && (event.position.y - start.y).abs() <= px(4.)
@@ -682,7 +688,7 @@ impl Gui {
         }
         self.scrollbar_hovered = hovered;
         if event.pressed_button != Some(MouseButton::Left) {
-            self.scroll_drag = None;
+            self.end_mouse_drag();
             return;
         }
         let result = (|| -> Result<()> {
@@ -1376,7 +1382,7 @@ impl Render for Gui {
                 .on_mouse_up_out(
                     MouseButton::Left,
                     cx.listener(|this, _, _, _| {
-                        this.scroll_drag = None;
+                        this.end_mouse_drag();
                         this.link_press = None;
                     }),
                 )
