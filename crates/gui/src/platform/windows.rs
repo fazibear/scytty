@@ -4,6 +4,34 @@ use std::{os::windows::process::CommandExt, process::Command};
 
 pub const OVERLAY_SCROLLBAR: bool = true;
 
+pub fn init_notifications() -> Result<()> {
+    // Unpackaged Windows apps need an identity registered for toast delivery.
+    let mut command = Command::new("reg.exe");
+    command.args([
+        "add",
+        r"HKCU\Software\Classes\AppUserModelId\app.scytty.terminal",
+        "/v",
+        "DisplayName",
+        "/t",
+        "REG_SZ",
+        "/d",
+        "Scytty",
+        "/f",
+    ]);
+    hide_console(&mut command);
+    let output = command.output()?;
+    anyhow::ensure!(
+        output.status.success(),
+        "Could not register notification identity: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(())
+}
+
+pub fn configure_notification(notification: &mut notify_rust::Notification) {
+    notification.app_id("app.scytty.terminal");
+}
+
 pub fn command_modifier(modifiers: Modifiers) -> bool {
     modifiers.control
 }

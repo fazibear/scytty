@@ -19,6 +19,8 @@ hmac = "0.13"
 image = { version = "0.25", default-features = false, features = ["png"] }
 libc = "0.2"
 mlua = { version = "0.12", features = ["luajit", "vendored", "error-send"] }
+notify-rust = "4.19"
+objc = "0.2"
 png = "0.18"
 portable-pty = "0.9"
 scytty-common = { path = "crates/common" }

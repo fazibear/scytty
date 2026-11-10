@@ -25,6 +25,7 @@ mod config;
 mod fonts;
 mod images;
 mod links;
+mod notifications;
 mod platform;
 mod remote;
 mod scrollbar;
@@ -435,7 +436,7 @@ impl Gui {
                 Update::Output { id, bytes } => {
                     if let Some(tab) = self.tabs.get_mut(&id) {
                         tab.terminal.vt_write(&bytes);
-                        tab.terminal.events().for_each(drop);
+                        tab.terminal.events().for_each(notifications::handle);
                     }
                 }
                 Update::Resized {

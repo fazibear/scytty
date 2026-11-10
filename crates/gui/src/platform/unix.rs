@@ -4,6 +4,19 @@ use std::process::Command;
 
 pub const OVERLAY_SCROLLBAR: bool = false;
 
+pub fn init_notifications() -> Result<()> {
+    Ok(())
+}
+
+pub fn configure_notification(notification: &mut notify_rust::Notification) {
+    let body = notification
+        .body
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
+    notification.body(&body);
+}
+
 pub fn command_modifier(modifiers: Modifiers) -> bool {
     modifiers.control
 }

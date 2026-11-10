@@ -224,6 +224,20 @@ the new session and all its new tabs; omitted `bin` keeps the server's default
 shell or an existing session's program. An explicit different `bin` cannot replace
 an existing session's program: choose another `session` name instead.
 
+Applications can send native desktop notifications using OSC 9 or OSC 777,
+including from SSH sessions:
+
+```sh
+printf '\033]9;Job finished\007'
+printf '\033]777;notify;Build;Build finished\007'
+```
+
+Notifications are shown by the attached GUI, including for inactive tabs. Allow
+Scytty notifications in your OS settings; on macOS use the installed Scytty.app.
+Requests are limited to one every two seconds across GUI windows, with bounded
+text and queue sizes. Windows registers a per-user Scytty notification identity.
+Click-to-focus actions and Kitty OSC 99 notifications are not implemented.
+
 Click an HTTP/HTTPS URL or an OSC 8 hyperlink to open it in the system browser.
 Links are underlined on hover and the pointer becomes a hand; dragging still selects text. Other URL
 schemes are not opened. Plain URLs are detected within a visible row; wrapped
