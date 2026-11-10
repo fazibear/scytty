@@ -101,6 +101,39 @@ fn tabs_and_reattach() -> Result<()> {
     )?;
     let (tabs, first) = state(&mut stream)?;
     assert_eq!(tabs, [first]);
+    // A rejected request belongs to this window, not every attached session.
+    let mut unrelated = UnixStream::connect(&path)?;
+    unrelated.set_read_timeout(Some(Duration::from_secs(5)))?;
+    protocol::handshake(&mut unrelated)?;
+    protocol::send(
+        &mut unrelated,
+        &Request::Attach {
+            session: "unrelated".into(),
+            bin: Some("/bin/sh".into()),
+        },
+    )?;
+    let (_, unrelated_tab) = state(&mut unrelated)?;
+    protocol::send(
+        &mut stream,
+        &Request::Resize {
+            id: first,
+            cols: 0,
+            rows: 24,
+            width: 8,
+            height: 16,
+        },
+    )?;
+    loop {
+        if let Update::Error(message) = protocol::receive(&mut stream)? {
+            assert!(message.contains("invalid terminal dimensions"));
+            break;
+        }
+    }
+    protocol::send(&mut unrelated, &Request::Activate { id: unrelated_tab })?;
+    assert_eq!(state(&mut unrelated)?.1, unrelated_tab);
+    // End the fixture session without leaving its shell running.
+    protocol::send(&mut unrelated, &Request::CloseSession)?;
+    drop(unrelated);
     assert_session_env(&mut stream, first)?;
     protocol::send(
         &mut stream,

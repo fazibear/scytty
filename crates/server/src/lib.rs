@@ -139,6 +139,21 @@ enum Event {
     Output(String, u64, Vec<u8>),
     End(String, u64, Option<String>),
 }
+fn error_output(event: &Event, sessions: &HashMap<String, Session>) -> Option<SyncSender<Update>> {
+    let client = match event {
+        Event::Attach(client, ..) => Some(client),
+        Event::Request(id, _) | Event::Detached(id) => sessions
+            .values()
+            .filter_map(|session| session.client.as_ref())
+            .find(|client| client.id == *id),
+        Event::Output(name, ..) | Event::End(name, ..) => sessions
+            .get(name)
+            .and_then(|session| session.client.as_ref()),
+        Event::Shutdown => None,
+    };
+    client.map(|client| client.output.clone())
+}
+
 fn tab_cwd(tab: &Tab) -> Option<std::path::PathBuf> {
     if tab.exited {
         return None;
@@ -337,6 +352,7 @@ pub fn run() -> Result<()> {
     let mut next_tab = 1;
     for event in rx {
         let shutdown = matches!(event, Event::Shutdown);
+        let error_output = error_output(&event, &sessions);
         let result: Result<()> = (|| {
             match event {
                 Event::Shutdown => {}
@@ -542,8 +558,8 @@ pub fn run() -> Result<()> {
         })();
         if let Err(e) = result {
             eprintln!("{e:#}");
-            for session in sessions.values_mut() {
-                session.emit(Update::Error(e.to_string()));
+            if let Some(output) = error_output {
+                let _ = output.send(Update::Error(e.to_string()));
             }
         }
         if shutdown {
@@ -556,6 +572,48 @@ pub fn run() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn event_errors_only_reach_the_responsible_client() -> Result<()> {
+        let mut sessions = HashMap::new();
+        let mut receivers = Vec::new();
+        let mut peers = Vec::new();
+        for id in [1, 2] {
+            let (socket, peer) = scytty_common::stream::pair()?;
+            peers.push(peer);
+            let (output, updates) = mpsc::sync_channel(4);
+            receivers.push(updates);
+            sessions.insert(
+                id.to_string(),
+                Session {
+                    bin: None,
+                    scrollback_mb: 16,
+                    tabs: vec![],
+                    active: 0,
+                    client: Some(Client { id, output, socket }),
+                },
+            );
+        }
+        for event in [
+            Event::Request(1, Request::NewTab),
+            Event::Output("1".into(), 0, vec![]),
+            Event::End("1".into(), 0, None),
+        ] {
+            error_output(&event, &sessions)
+                .unwrap()
+                .send(Update::Error("failed".into()))?;
+            assert!(
+                matches!(receivers[0].try_recv()?, Update::Error(message) if message == "failed")
+            );
+            assert!(matches!(
+                receivers[1].try_recv(),
+                Err(mpsc::TryRecvError::Empty)
+            ));
+        }
+        assert!(error_output(&Event::Request(99, Request::NewTab), &sessions).is_none());
+        assert!(error_output(&Event::Shutdown, &sessions).is_none());
+        Ok(())
+    }
+
     #[test]
     fn output_bursts_wait_for_queue_capacity() -> Result<()> {
         let (socket, _peer) = scytty_common::stream::pair()?;

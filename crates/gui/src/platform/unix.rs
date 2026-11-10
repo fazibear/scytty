@@ -3,6 +3,7 @@ use gpui::{prelude::*, *};
 use std::process::Command;
 
 pub const OVERLAY_SCROLLBAR: bool = false;
+pub const WINDOWS_PATHS: bool = false;
 
 pub fn set_progress(
     _progress: Option<&scytty_common::protocol::Progress>,
@@ -50,23 +51,6 @@ pub fn titlebar() -> Stateful<Div> {
 
 pub fn window_controls(bar: Stateful<Div>) -> Stateful<Div> {
     bar
-}
-
-pub fn paint_scrollbar(
-    window: &mut Window,
-    track: Bounds<Pixels>,
-    thumb: Bounds<Pixels>,
-    _has_history: bool,
-    _opacity: f32,
-) {
-    window.paint_quad(fill(track, rgb(0x171717)));
-    window.paint_quad(fill(thumb, rgb(0x686868)));
-}
-
-pub fn connect_local() -> Result<crate::transport::Connection> {
-    let mut command = Command::new(scytty_common::connection::server_executable()?);
-    command.arg("--stdio");
-    crate::transport::bridge(command)
 }
 
 pub fn hide_console(_command: &mut Command) {}

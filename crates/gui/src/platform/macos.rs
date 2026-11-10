@@ -6,6 +6,7 @@ use objc2_foundation::{NSPoint, NSRect, NSSize};
 use std::process::Command;
 
 pub const OVERLAY_SCROLLBAR: bool = true;
+pub const WINDOWS_PATHS: bool = false;
 
 thread_local! {
     static DOCK_PROGRESS: std::cell::RefCell<(Option<WindowId>, Option<scytty_common::protocol::Progress>)> = const { std::cell::RefCell::new((None, None)) };
@@ -160,29 +161,6 @@ pub fn titlebar() -> Stateful<Div> {
 
 pub fn window_controls(bar: Stateful<Div>) -> Stateful<Div> {
     bar
-}
-
-pub fn paint_scrollbar(
-    window: &mut Window,
-    _track: Bounds<Pixels>,
-    thumb: Bounds<Pixels>,
-    has_history: bool,
-    opacity: f32,
-) {
-    if !has_history {
-        return;
-    }
-    let mut color = rgba(0xffffff70);
-    color.a *= opacity;
-    let mut thumb = fill(thumb, color);
-    thumb.corner_radii = (thumb.bounds.size.width / 2.).into();
-    window.paint_quad(thumb);
-}
-
-pub fn connect_local() -> Result<crate::transport::Connection> {
-    let mut command = Command::new(scytty_common::connection::server_executable()?);
-    command.arg("--stdio");
-    crate::transport::bridge(command)
 }
 
 pub fn hide_console(_command: &mut Command) {}

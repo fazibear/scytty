@@ -400,7 +400,13 @@ new shells (restarting ends existing sessions).
 - ANSI colors, alternate screen, terminal replies and resize propagation
 - Clipboard paste with Ghostty's bracketed-paste encoding
 - Drop files into the window to paste shell-quoted paths (multiple files supported).
-  In SSH sessions these are local paths, not file uploads.
+  SSH uses POSIX quoting; local Windows follows `COMSPEC` (normally cmd.exe), or
+  the configured `bin` for PowerShell/POSIX shells. Unsafe cmd.exe paths containing
+  `%`, `!`, or quotes are rejected rather than expanded. Unknown Windows programs
+  are rejected; after reattaching a custom-shell session, specify its `bin` in the
+  connect menu so quoting matches. Quoting assumes the configured shell, not a
+  different interpreter started inside it. In SSH sessions these are local paths,
+  not file uploads.
 - Mouse-wheel scrollback, configurable with `scrollback_mb` (default 16 MiB per tab)
 - Multiple tabs, server-owned PTYs, live state/output synchronization
 - Gzip-compressed binary protocol over a private local Unix socket

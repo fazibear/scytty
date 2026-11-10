@@ -2,10 +2,78 @@ use anyhow::{Context, Result, bail};
 use std::{
     io,
     process::{Child, Command, Stdio},
+    sync::mpsc::{self, Receiver},
     thread,
+    time::Duration,
 };
 
 use scytty_common::stream::{self, Stream};
+
+use crate::{platform, reconnect, remote};
+use scytty_common::protocol::{self, Request, Update};
+
+pub struct Connected {
+    pub connection: Connection,
+    pub writer: Stream,
+    pub updates: Receiver<Result<Update>>,
+    pub wakeups: async_channel::Receiver<()>,
+}
+
+pub fn connect_session(
+    host: Option<String>,
+    session: String,
+    bin: Option<String>,
+) -> Result<Connected> {
+    let connection = match host.as_deref() {
+        Some(host) => connect(host)?,
+        None => connect_local()?,
+    };
+    attach(connection, session, bin).map_err(|error| {
+        match remote::restart_after_mismatch(host.as_deref()) {
+            Err(warning) if warning.downcast_ref::<remote::RestartRequired>().is_some() => {
+                warning.context(format!("{error:#}"))
+            }
+            _ => error,
+        }
+    })
+}
+
+pub fn attach(connection: Connection, session: String, bin: Option<String>) -> Result<Connected> {
+    let mut writer = connection.socket.try_clone()?;
+    writer.set_write_timeout(Some(Duration::from_secs(5)))?;
+    writer.set_read_timeout(Some(Duration::from_secs(5)))?;
+    protocol::handshake(&mut writer).map_err(|error| {
+        if reconnect::transport_error(&error) {
+            error
+        } else {
+            error.context(reconnect::IncompatiblePeer)
+        }
+    })?;
+    writer.set_read_timeout(None)?;
+    protocol::send(&mut writer, &Request::Attach { session, bin })?;
+    let mut reader = writer.try_clone()?;
+    let (tx, updates) = mpsc::sync_channel(256);
+    let (wake, wakeups) = async_channel::bounded(1);
+    thread::spawn(move || {
+        loop {
+            let update = protocol::receive(&mut reader).context("Server connection closed or sent an incomplete frame; check SSH output and ~/.scytty/server.log on the server");
+            let failed = update.is_err();
+            if tx.send(update).is_err() {
+                break;
+            }
+            let _ = wake.try_send(());
+            if failed {
+                break;
+            }
+        }
+    });
+    Ok(Connected {
+        connection,
+        writer,
+        updates,
+        wakeups,
+    })
+}
 
 pub struct Connection {
     pub socket: Stream,
@@ -17,6 +85,13 @@ impl Drop for Connection {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+fn connect_local() -> Result<Connection> {
+    let mut command = Command::new(scytty_common::connection::server_executable()?);
+    command.arg("--stdio");
+    platform::hide_console(&mut command);
+    bridge(command)
 }
 
 pub fn connect(host: &str) -> Result<Connection> {
@@ -58,6 +133,16 @@ pub(crate) fn validate_host(host: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn ssh_connection_failure_is_returned_from_worker() {
+        let result =
+            thread::spawn(|| connect_session(Some("-invalid-host".into()), "test".into(), None))
+                .join()
+                .expect("connection worker panicked");
+        let error = result.err().expect("invalid SSH host must fail");
+        assert!(error.to_string().contains("invalid SSH destination"));
+    }
+
     #[cfg(unix)]
     #[test]
     fn stdio_bridge_roundtrip() -> Result<()> {
@@ -100,7 +185,7 @@ mod tests {
             ));
             Ok(())
         });
-        let connected = crate::Gui::attach(connection, "test".into(), None)?;
+        let connected = attach(connection, "test".into(), None)?;
         assert!(
             matches!(connected.updates.recv_timeout(Duration::from_secs(5))??, Update::Error(message) if message == "attach rejected")
         );

@@ -6,6 +6,28 @@ use gpui::{prelude::*, *};
 mod current;
 pub use current::*;
 
+pub fn paint_scrollbar(
+    window: &mut Window,
+    track: Bounds<Pixels>,
+    thumb: Bounds<Pixels>,
+    has_history: bool,
+    opacity: f32,
+) {
+    if OVERLAY_SCROLLBAR {
+        if !has_history {
+            return;
+        }
+        let mut color = rgba(0xffffff70);
+        color.a *= opacity;
+        let mut thumb = fill(thumb, color);
+        thumb.corner_radii = (thumb.bounds.size.width / 2.).into();
+        window.paint_quad(thumb);
+    } else {
+        window.paint_quad(fill(track, rgb(0x171717)));
+        window.paint_quad(fill(thumb, rgb(0x686868)));
+    }
+}
+
 fn titlebar_base() -> Stateful<Div> {
     div()
         .id("titlebar")
