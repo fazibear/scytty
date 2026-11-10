@@ -45,9 +45,15 @@ Every shell started by the server receives `SCYTTY_SESSION` set to its session n
 (including over SSH).
 Closing a local or SSH window detaches and preserves its session and shells. Reopen the
 same session name (`default` when omitted) to restore its tabs and terminal snapshots.
-Closing the last tab deletes the session and closes the window. Unexpected
-connection loss also detaches. The socket and server log
-live in `~/.scytty`. Sessions do not survive server restart.
+Closing the last tab deletes the session and closes the window. After an established
+connection drops, the GUI automatically reconnects to the same local or SSH session,
+retrying after 1, 2, 4, 8, 16, then 30 seconds (capped). The last screen stays visible
+with a reconnect banner; keyboard input is discarded while disconnected, never
+buffered or replayed. Reattachment restores fresh terminal snapshots. Initial
+connection failures, rejected sessions, and incompatible servers still show an error;
+reconnect never approves a daemon restart or takes over another attached window.
+The socket and server log live in `~/.scytty`. Sessions do not survive server restart;
+if the session no longer exists, reattachment creates a new shell.
 
 The default font is the system **monospace** family at 16pt. No fonts are bundled.
 Install and select a Nerd Font to display the status bar's icons.

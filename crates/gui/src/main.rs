@@ -27,6 +27,7 @@ mod images;
 mod links;
 mod notifications;
 mod platform;
+mod reconnect;
 mod remote;
 mod scrollbar;
 mod transport;
@@ -177,6 +178,8 @@ struct Gui {
     plus_menu_selected: usize,
     connection: Option<transport::Connection>,
     connecting: bool,
+    has_connected: bool,
+    reconnect: Option<reconnect::Reconnect>,
     writer: Option<Stream>,
     updates: Option<Receiver<Result<Update>>>,
     pending: Option<Result<Update>>,
@@ -221,6 +224,8 @@ impl Gui {
             plus_menu_selected: 0,
             connection: None,
             connecting: false,
+            has_connected: false,
+            reconnect: None,
             writer: None,
             updates: None,
             pending: None,
@@ -258,15 +263,23 @@ impl Gui {
                         if view.error.is_some() {
                             return;
                         }
+                        if view
+                            .reconnect
+                            .as_mut()
+                            .is_some_and(|retry| retry.start_if_due(Instant::now()))
+                        {
+                            view.start_connect(None, cx);
+                        }
                         if view.pending.is_none()
                             && let Some(rx) = &view.updates
                         {
                             view.pending = match rx.try_recv() {
                                 Ok(update) => Some(update),
                                 Err(mpsc::TryRecvError::Empty) => None,
-                                Err(_) => Some(Err(anyhow::anyhow!(
-                                    "Server disconnected; reopen this session to attach again"
-                                ))),
+                                Err(_) => Some(Err(std::io::Error::from(
+                                    std::io::ErrorKind::UnexpectedEof,
+                                )
+                                .into())),
                             };
                         }
                         if view.pending.is_some() || last_status.elapsed() >= Duration::from_secs(1)
@@ -288,6 +301,10 @@ impl Gui {
         self.connecting = true;
         self.error = None;
         self.remote_restart = None;
+        self.pending = None;
+        self.updates = None;
+        self.writer = None;
+        self.connection = None;
         let host = self.host.clone();
         let session = self.session.clone();
         let bin = self.bin.clone();
@@ -307,8 +324,16 @@ impl Gui {
                         view.updates = Some(connected.updates);
                     }
                     Err(error) => {
-                        view.connecting = false;
-                        view.report(Err(error), cx);
+                        if view.reconnect.is_some()
+                            && error.downcast_ref::<remote::RestartRequired>().is_none()
+                            && error
+                                .downcast_ref::<reconnect::IncompatiblePeer>()
+                                .is_none()
+                        {
+                            view.retry_connection(cx);
+                        } else {
+                            view.report(Err(error), cx);
+                        }
                     }
                 }
                 cx.notify();
@@ -341,7 +366,13 @@ impl Gui {
         let mut writer = connection.socket.try_clone()?;
         writer.set_write_timeout(Some(Duration::from_secs(5)))?;
         writer.set_read_timeout(Some(Duration::from_secs(5)))?;
-        protocol::handshake(&mut writer)?;
+        protocol::handshake(&mut writer).map_err(|error| {
+            if reconnect::transport_error(&error) {
+                error
+            } else {
+                error.context(reconnect::IncompatiblePeer)
+            }
+        })?;
         writer.set_read_timeout(None)?;
         protocol::send(&mut writer, &Request::Attach { session, bin })?;
         let mut reader = writer.try_clone()?;
@@ -401,8 +432,33 @@ impl Gui {
         let n = ghostty_vt::paste::encode(&mut data, bracketed, &mut encoded)?;
         self.input(&encoded[..n])
     }
+    fn retry_connection(&mut self, cx: &mut Context<Self>) {
+        self.connecting = true;
+        self.error = None;
+        self.pending = None;
+        self.updates = None;
+        self.writer = None;
+        self.connection = None;
+        self.end_mouse_drag();
+        self.link_press = None;
+        self.marked.clear();
+        self.marked_selection = 0..0;
+        match &mut self.reconnect {
+            Some(retry) => retry.failed(Instant::now()),
+            None => self.reconnect = Some(reconnect::Reconnect::new(Instant::now())),
+        }
+        cx.notify();
+    }
     fn report(&mut self, result: Result<()>, cx: &mut Context<Self>) {
         if let Err(e) = result {
+            if self.has_connected
+                && reconnect::transport_error(&e)
+                && e.downcast_ref::<remote::RestartRequired>().is_none()
+            {
+                self.retry_connection(cx);
+                return;
+            }
+            self.reconnect = None;
             self.connecting = false;
             self.remote_restart = e.downcast_ref::<remote::RestartRequired>().cloned();
             self.error = Some(format!("{e:#}"));
@@ -415,7 +471,9 @@ impl Gui {
             let update = match self.pending.take().map(Ok).unwrap_or_else(|| rx.try_recv()) {
                 Ok(update) => update?,
                 Err(mpsc::TryRecvError::Empty) => break,
-                Err(_) => anyhow::bail!("Server disconnected; reopen this session to attach again"),
+                Err(_) => {
+                    return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof).into());
+                }
             };
             match update {
                 Update::Snapshot { id, bytes } => {
@@ -426,6 +484,8 @@ impl Gui {
                     ))?;
                     self.tabs.insert(id, Tab::new(terminal)?);
                     if self.connecting {
+                        self.has_connected = true;
+                        self.reconnect = None;
                         self.connecting = false;
                         // A rejected attach must not close with an unread configuration request.
                         self.request(Request::SetScrollback {
@@ -1137,8 +1197,7 @@ impl Render for Gui {
         if self.error.is_none()
             && let Err(e) = self.drain(window)
         {
-            self.connecting = false;
-            self.error = Some(format!("{e:#}"));
+            self.report(Err(e), cx);
         }
         let mut root = div()
             .relative()
@@ -1168,8 +1227,22 @@ impl Render for Gui {
                 self.error = Some(format!("{e:#}"));
             }
         }
+        if let Some(retry) = &self.reconnect {
+            root = root.child(
+                div()
+                    .flex_shrink_0()
+                    .px(px(8.))
+                    .py(px(4.))
+                    .bg(rgb(0x38204f))
+                    .child(format!(
+                        "Reconnecting to {}… (attempt {}) — input paused",
+                        self.host.as_deref().unwrap_or("local server"),
+                        retry.attempts
+                    )),
+            );
+        }
         if let Some(error) = self.error.clone().or_else(|| {
-            self.connecting.then(|| {
+            (self.connecting && self.reconnect.is_none()).then(|| {
                 format!(
                     "Connecting to {}…",
                     self.host.as_deref().unwrap_or("local server")
