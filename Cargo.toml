@@ -26,7 +26,7 @@ objc2-app-kit = { version = "0.3", default-features = false, features = ["std", 
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSGeometry"] }
 png = "0.18"
 portable-pty = "0.9"
-raw-window-handle = "0.6"
+raw-window-handle = { version = "0.6", features = ["std"] }
 scytty-common = { path = "crates/common" }
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.11"
