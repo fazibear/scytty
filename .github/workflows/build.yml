@@ -2,6 +2,8 @@ name: Build
 
 on:
   push:
+    # Default-branch caches can be reused by future tags; tag caches cannot.
+    branches: [main]
     tags:
       - '*'
 
@@ -36,7 +38,11 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.17.0
+          cache-key: server-${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Test and build server
         shell: bash
         run: |
@@ -104,7 +110,11 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.17.0
+          cache-key: desktop-${{ matrix.platform }}
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.platform }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Verify complete bundle
         shell: bash
         run: |
@@ -135,6 +145,7 @@ jobs:
           if-no-files-found: error
 
   release:
+    if: startsWith(github.ref, 'refs/tags/')
     needs: [servers, build]
     runs-on: ubuntu-latest
     permissions:
