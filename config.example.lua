@@ -1,6 +1,7 @@
 -- Copy to ~/.config/scytty/config.lua (or $XDG_CONFIG_HOME/scytty/config.lua).
 return {
   font_size = 16,
+  default_cursor_style = "block", -- block, bar, underline or block_hollow.
   scrollback_mb = 16, -- Per-tab MiB, 0–64; 0 disables scrollback.
   font_family = "monospace", -- Or an installed family name.
   icon_scale = 1.4, -- Nerd Font icons followed by a space (1–3).

@@ -23,6 +23,7 @@ pub struct MenuEntry {
 pub struct Config {
     pub plus_menu: Vec<MenuEntry>,
     pub font_size: f32,
+    pub default_cursor_style: ghostty_vt::terminal::CursorStyle,
     pub scrollback_mb: u16,
     pub font_family: String,
     pub icon_scale: f32,
@@ -55,6 +56,7 @@ impl Default for Config {
                 },
             ],
             font_size: 16.0,
+            default_cursor_style: ghostty_vt::terminal::CursorStyle::Block,
             scrollback_mb: 16,
             font_family: "monospace".into(),
             icon_scale: 1.5,
@@ -274,6 +276,22 @@ impl Config {
                     .collect::<Result<_>>()?;
                 continue;
             }
+            if key == "default_cursor_style" {
+                use ghostty_vt::terminal::CursorStyle;
+                let Value::String(value) = raw else {
+                    bail!("default_cursor_style must be a string")
+                };
+                config.default_cursor_style = match value.to_str()?.as_ref() {
+                    "block" => CursorStyle::Block,
+                    "bar" => CursorStyle::Bar,
+                    "underline" => CursorStyle::Underline,
+                    "block_hollow" => CursorStyle::BlockHollow,
+                    _ => {
+                        bail!("default_cursor_style must be block, bar, underline or block_hollow")
+                    }
+                };
+                continue;
+            }
             if key == "font_family" {
                 let Value::String(value) = raw else {
                     bail!("font_family must be a string")
@@ -380,6 +398,33 @@ mod tests {
         }
         Ok(())
     }
+    #[test]
+    fn cursor_style_configuration() -> Result<()> {
+        use ghostty_vt::terminal::CursorStyle;
+        use ghostty_vt::{RenderState, Terminal, TerminalOptions};
+        assert_eq!(Config::default().default_cursor_style, CursorStyle::Block);
+        for name in ["block", "bar", "underline", "block_hollow"] {
+            let config = Config::parse(&format!("return {{default_cursor_style='{name}'}}"))?;
+            let mut terminal = Terminal::new(TerminalOptions::default())?;
+            terminal.set_default_cursor_style(Some(config.default_cursor_style))?;
+            let mut render = RenderState::new()?;
+            let expected = render.update(&terminal)?.cursor_visual_style()?;
+            assert_eq!(expected as i32, config.default_cursor_style as i32);
+            terminal.vt_write(b"\x1b[6 q");
+            terminal.set_default_cursor_style(Some(config.default_cursor_style))?;
+            assert_eq!(
+                render.update(&terminal)?.cursor_visual_style()?,
+                ghostty_vt::render::CursorVisualStyle::Bar
+            );
+            terminal.vt_write(b"\x1b[0 q");
+            assert_eq!(render.update(&terminal)?.cursor_visual_style()?, expected);
+        }
+        for value in ["'beam'", "''", "42", "false", "{}"] {
+            assert!(Config::parse(&format!("return {{default_cursor_style={value}}}")).is_err());
+        }
+        Ok(())
+    }
+
     #[test]
     fn scrollback_configuration() -> Result<()> {
         assert_eq!(Config::default().scrollback_mb, 16);

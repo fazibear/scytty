@@ -20,6 +20,7 @@ use std::{
 mod ansi;
 mod clipboard;
 mod config;
+mod cursor;
 mod find;
 mod fonts;
 mod images;
@@ -141,18 +142,29 @@ impl Gui {
             view.start_connect(None, cx);
         }
         cx.spawn(async move |view, cx| {
+            let mut status_tick = false;
             loop {
-                cx.background_executor().timer(Duration::from_secs(1)).await;
+                cx.background_executor()
+                    .timer(Duration::from_millis(500))
+                    .await;
+                status_tick = !status_tick;
                 if view
                     .update(cx, |view, cx| {
-                        if view
-                            .reconnect
-                            .as_mut()
-                            .is_some_and(|retry| retry.start_if_due(Instant::now()))
+                        if status_tick
+                            && view
+                                .reconnect
+                                .as_mut()
+                                .is_some_and(|retry| retry.start_if_due(Instant::now()))
                         {
                             view.start_connect(None, cx);
                         }
-                        cx.notify();
+                        if status_tick
+                            || view.tabs.get(&view.active).is_some_and(|tab| {
+                                tab.cursor.is_some() && tab.cursor_state.is_some_and(|c| c.blinking)
+                            })
+                        {
+                            cx.notify();
+                        }
                     })
                     .is_err()
                 {
@@ -246,6 +258,7 @@ impl Gui {
         if tab.exited {
             return Ok(());
         }
+        tab.cursor_since = Instant::now();
         tab.terminal.set_selection(None)?;
         tab.anchor = None;
         tab.terminal.scroll_viewport(ScrollViewport::Bottom);
@@ -366,6 +379,7 @@ impl Gui {
                     terminal.set_scrollback_max_bytes(Some(
                         usize::from(self.config.scrollback_mb) * 1024 * 1024,
                     ))?;
+                    terminal.set_default_cursor_style(Some(self.config.default_cursor_style))?;
                     self.tabs.insert(id, Tab::new(terminal)?);
                     if self.connecting {
                         self.has_connected = true;
@@ -943,15 +957,7 @@ impl Gui {
             for image in images.iter().filter(|i| i.z >= 0) {
                 image.paint(window)?;
             }
-            if let Some((x, y)) = tab.cursor {
-                window.paint_quad(fill(
-                    Bounds::new(
-                        bounds.origin + point(cell.width * x as f32, cell.height * y as f32),
-                        size(px(2.), cell.height),
-                    ),
-                    tab.cursor_color,
-                ));
-            }
+            cursor::paint(tab, bounds.origin, cell, &font, font_size, window, cx)?;
             if self.find.is_none() && !self.marked.is_empty() {
                 let (x, y) = tab.cursor.unwrap_or((0, 0));
                 let run = TextRun {

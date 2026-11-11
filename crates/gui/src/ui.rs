@@ -90,6 +90,10 @@ impl Gui {
                         ))?;
                     }
                 }
+                for tab in self.tabs.values_mut() {
+                    tab.terminal
+                        .set_default_cursor_style(Some(config.default_cursor_style))?;
+                }
                 self.initial_font_size = config.font_size;
                 self.config = config;
                 window.set_window_title(&title);

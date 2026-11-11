@@ -32,6 +32,8 @@ pub(super) struct Tab {
     pub(super) search: Option<ghostty_vt::search::Search>,
     pub(super) cursor: Option<(u16, u16)>,
     pub(super) cursor_color: Rgba,
+    pub(super) cursor_state: Option<ghostty_vt::render::Cursor>,
+    pub(super) cursor_since: Instant,
     pub(super) default_colors: Option<(ghostty_vt::style::RgbColor, ghostty_vt::style::RgbColor)>,
     pub(super) hold_since: Option<Instant>,
     pub(super) encoder: key::Encoder,
@@ -55,6 +57,8 @@ impl Tab {
             search: None,
             cursor: None,
             cursor_color: rgb(0xffffff),
+            cursor_state: None,
+            cursor_since: Instant::now(),
             default_colors: None,
             hold_since: None,
             encoder: key::Encoder::new()?,
@@ -113,8 +117,13 @@ impl Tab {
             return Ok(false);
         }
         let snapshot = self.render.update(&self.terminal)?;
-        self.cursor = if snapshot.cursor_visible()? {
-            snapshot.cursor_viewport()?.map(|p| (p.x, p.y))
+        let cursor = snapshot.cursor()?;
+        if self.cursor_state != Some(cursor) {
+            self.cursor_since = Instant::now();
+            self.cursor_state = Some(cursor);
+        }
+        self.cursor = if cursor.visible {
+            cursor.viewport.map(|p| (p.x, p.y))
         } else {
             None
         };
@@ -350,6 +359,36 @@ mod tests {
         assert!(!tab.request_resize(intermediate, now + Duration::from_millis(220), true));
         assert!(!tab.request_resize(intermediate, now + Duration::from_millis(250), true));
         assert!(tab.request_resize(intermediate, now + Duration::from_millis(300), true));
+        Ok(())
+    }
+
+    #[test]
+    fn application_cursor_shapes_and_blink_survive_snapshots() -> Result<()> {
+        use ghostty_vt::render::CursorVisualStyle::{Bar, Block, Underline};
+        let mut tab = Tab::new(Terminal::new(TerminalOptions::default())?)?;
+        for (code, style, blinking) in [
+            (1, Block, true),
+            (2, Block, false),
+            (3, Underline, true),
+            (4, Underline, false),
+            (5, Bar, true),
+            (6, Bar, false),
+        ] {
+            tab.terminal.vt_write(format!("\x1b[{code} q").as_bytes());
+            tab.snapshot()?;
+            let cursor = tab.cursor_state.unwrap();
+            assert_eq!(cursor.visual_style, style);
+            assert_eq!(cursor.blinking, blinking);
+            let mut bytes = Vec::new();
+            ghostty_vt::snapshot::encode_to(&tab.terminal, &mut bytes)?;
+            let mut restored =
+                Tab::new(ghostty_vt::snapshot::Decoder::from_slice(&bytes).decode()?)?;
+            restored.snapshot()?;
+            assert_eq!(restored.cursor_state, tab.cursor_state);
+        }
+        tab.terminal.vt_write(b"\x1b[?25l");
+        tab.snapshot()?;
+        assert!(tab.cursor.is_none());
         Ok(())
     }
 

@@ -121,6 +121,7 @@ The GUI evaluates `~/.config/scytty/config.lua` with bundled **LuaJIT** on start
 ```lua
 return {
   font_size = 16,
+  default_cursor_style = "block",
   background_opacity = 0.8,
   window_width = 960,
   window_height = 640,
@@ -319,6 +320,12 @@ printf '\033]5522;type=wdata\033\\'
 ANSI underline (single, double, curly, dotted and dashed) and strikethrough are
 rendered across the terminal cell grid, including spaces and wide characters.
 Underline colors support SGR 58 (palette or RGB); SGR 59 restores the text color.
+Application-controlled cursors support block, underline and bar shapes (DECSCUSR),
+blinking, and hide/show (DEC mode 25). Unfocused windows show a steady hollow cursor;
+solid blocks keep the character beneath them readable.
+`default_cursor_style` accepts `"block"` (default), `"bar"`, `"underline"` or
+`"block_hollow"`. Reload config applies it to open tabs without overriding an
+application's explicit cursor shape; a cursor reset returns to the configured style.
 
 Applications can change the terminal's default foreground/background/cursor colors
 with OSC 10/11/12 and reset them with OSC 110/111/112. Background opacity still
