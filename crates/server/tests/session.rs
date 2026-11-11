@@ -272,7 +272,7 @@ fn tabs_and_reattach() -> Result<()> {
     }
     protocol::send(&mut stream, &Request::Input {
         id: first,
-        bytes: b"printf '\\033_Ga=T,q=2,f=24,s=1,v=1,i=7,c=2,r=2;/wAA\\033\\134\\033]22;pointer\\007\\033]10;#112233\\007\\033]11;#445566\\007\\033]12;#778899\\007\\033]0;image-ready\\007'\n".to_vec(),
+        bytes: b"printf '\\033_Ga=T,q=2,f=24,s=1,v=1,i=7,c=2,r=2;/wAA\\033\\134\\033]22;pointer\\007\\033]10;#112233\\007\\033]11;#445566\\007\\033]12;#778899\\007\\033]7501;state=working:app=cargo\\007\\033]7501;state=blocked:id=build:kind=permission:progress=40:msg=QXBwcm92ZT8=\\007\\033]0;image-ready\\007'\n".to_vec(),
     })?;
     loop {
         if let Update::State { tabs, .. } = protocol::receive(&mut stream)?
@@ -372,6 +372,25 @@ fn tabs_and_reattach() -> Result<()> {
             assert_eq!(
                 tabs.iter().find(|t| t.id == first).unwrap().user_vars["right_status"],
                 "hello"
+            );
+            let status = tabs.iter().find(|t| t.id == first).unwrap();
+            assert_eq!(status.state.as_deref(), Some("blocked"));
+            assert_eq!(status.program_status["build"].app.as_deref(), Some("cargo"));
+            assert_eq!(
+                status.program_status["build"].kind.as_deref(),
+                Some("permission")
+            );
+            assert_eq!(
+                status.program_status["build"].message.as_deref(),
+                Some("Approve?")
+            );
+            assert_eq!(status.program_status["build"].progress, Some(40));
+            assert!(
+                tabs.iter()
+                    .find(|t| t.id == second)
+                    .unwrap()
+                    .state
+                    .is_none()
             );
             let progress = tabs
                 .iter()

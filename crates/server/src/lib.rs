@@ -47,6 +47,7 @@ fn copy_flushed(reader: &mut impl Read, writer: &mut impl Write) -> std::io::Res
 mod platform;
 pub use platform::daemon;
 mod metadata;
+mod program_status;
 
 struct Tab {
     progress: Option<Progress>,
@@ -117,6 +118,8 @@ impl Session {
             .tabs
             .iter()
             .map(|t| TabInfo {
+                state: t.metadata.program_status.state(),
+                program_status: t.metadata.program_status.snapshot(),
                 id: t.id,
                 title: t.terminal.title().unwrap_or("").to_string(),
                 exited: t.exited,
@@ -436,6 +439,10 @@ pub fn run() -> Result<()> {
                             }
                         }
                         let vars_changed = tab.metadata.feed(&bytes);
+                        if !tab.metadata.replies.is_empty() {
+                            tab.writer
+                                .write_all(&std::mem::take(&mut tab.metadata.replies))?;
+                        }
                         let changed = old_title != tab.terminal.title()?
                             || vars_changed
                             || old_progress != tab.progress;

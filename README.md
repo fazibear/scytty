@@ -182,8 +182,9 @@ own tab's progress. It survives detach/reattach, including over SSH. The active
 tab also updates native icon progress automatically: each Windows window's taskbar
 button, or the macOS Dock icon for the most recently focused window. Switching
 tabs, clearing progress, disconnecting, or closing the window clears stale progress.
-Windows shows native normal/error/paused/indeterminate states; macOS uses a standard
-Dock progress bar (including indeterminate), without distinct error/paused colors.
+Windows shows native normal/error/paused/indeterminate states; macOS uses a
+percentage bar or a moving segment for indeterminate work, without distinct
+error/paused colors.
 Lua status text remains opt-in, for example:
 
 ```lua
@@ -198,6 +199,39 @@ end,
 printf '\033]9;4;1;42\007' # normal, 42 percent
 printf '\033]9;4;0\007'    # clear
 ```
+
+### Program status (OSC 7501)
+
+`format_tab`, `left_status`, and `right_status` also receive `ctx.state`:
+`nil` with no reports, otherwise the
+most recently updated surviving record's state (`idle`, `working`, `done`,
+`blocked`, or `error`). This is not an aggregate of concurrent tasks.
+`ctx.program_status` contains all reports keyed by ID; `""` is the root record.
+Each has `state` and optional `app`, `kind`, `progress`, `title`, and `message`.
+For example:
+
+```lua
+format_tab = function(ctx)
+  return ctx.title .. (ctx.state and (" [" .. ctx.state .. "]") or "")
+end,
+```
+
+```sh
+printf '\033]7501;state=working:app=cargo:progress=40\007'
+printf '\033]7501;state=blocked:id=build:kind=permission:msg=QXBwcm92ZT8=\007'
+printf '\033]7501;state=clear\007'
+```
+
+`title` and `msg` on the wire are base64 UTF-8; Lua receives decoded plain text.
+Reports replace their whole record; omitted fields disappear. A missing `app`
+inherits from the nearest ancestor. Clearing an ID also clears its descendants;
+clearing without an ID or a terminal reset clears everything. New shell prompts
+(OSC 133 A) discard idle/working/blocked records; done/error records remain until
+cleared by the sender or reset. Closing a tab removes its records. Each tab keeps
+at most 256 records, evicting the least recently updated. State survives
+reattachment, including SSH. Support queries are answered by the server.
+These are untrusted program-provided values; no badges, notifications, or
+OSC 9;4 progress updates are triggered automatically.
 
 This changes tab metadata on the wire: update both GUI and server and restart
 the daemon when safe (restarting ends existing sessions).

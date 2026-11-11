@@ -127,6 +127,21 @@ impl Config {
             value.set("percent", progress.percent)?;
             ctx.set("progress", value)?;
         }
+        ctx.set("state", tab.and_then(|tab| tab.state.as_deref()))?;
+        let records = self.lua.create_table()?;
+        if let Some(tab) = tab {
+            for (id, status) in &tab.program_status {
+                let value = self.lua.create_table()?;
+                value.set("state", status.state.as_str())?;
+                value.set("app", status.app.as_deref())?;
+                value.set("kind", status.kind.as_deref())?;
+                value.set("progress", status.progress)?;
+                value.set("title", status.title.as_deref())?;
+                value.set("message", status.message.as_deref())?;
+                records.set(id.as_str(), value)?;
+            }
+        }
+        ctx.set("program_status", records)?;
         let function: Function = self.status.get(name)?;
         let value: Value = function
             .call(ctx)
@@ -427,6 +442,38 @@ mod tests {
         let config = Config::parse(include_str!("../../../config.example.lua"))?;
         let right = config.status_text("right_status", "", 0, false, false, None)?;
         assert_eq!(right[0].0, "");
+        Ok(())
+    }
+    #[test]
+    fn program_status_context_is_per_tab_and_optional() -> Result<()> {
+        let config = Config::parse(
+            "return {format_tab=function(c) local r=c.program_status['build']; return (c.state or 'none') .. ':' .. (r and (r.app .. ':' .. r.message .. ':' .. r.progress) or '-') end}",
+        )?;
+        let mut tab = scytty_common::protocol::TabInfo::default();
+        assert_eq!(
+            config.status_text("format_tab", "", 0, false, false, Some(&tab))?[0].0,
+            "none:-"
+        );
+        tab.state = Some("blocked".into());
+        tab.program_status.insert(
+            "build".into(),
+            scytty_common::protocol::ProgramStatus {
+                state: "blocked".into(),
+                app: Some("cargo".into()),
+                kind: Some("permission".into()),
+                progress: Some(40),
+                title: None,
+                message: Some("Approve?".into()),
+            },
+        );
+        assert_eq!(
+            config.status_text("format_tab", "", 0, false, false, Some(&tab))?[0].0,
+            "blocked:cargo:Approve?:40"
+        );
+        assert_eq!(
+            config.status_text("format_tab", "", 0, false, false, None)?[0].0,
+            "none:-"
+        );
         Ok(())
     }
     #[test]

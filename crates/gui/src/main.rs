@@ -145,7 +145,6 @@ impl Gui {
                 cx.background_executor().timer(Duration::from_secs(1)).await;
                 if view
                     .update(cx, |view, cx| {
-                        platform::tick_progress(view.window_handle.window_id());
                         if view
                             .reconnect
                             .as_mut()
@@ -290,7 +289,7 @@ impl Gui {
         }
         cx.notify();
     }
-    fn update_native_progress(&mut self, window: &Window, force: bool) {
+    fn update_native_progress(&mut self, window: &Window, force: bool, cx: &mut Context<Self>) {
         let progress = if self.connecting || self.error.is_some() {
             None
         } else {
@@ -298,7 +297,7 @@ impl Gui {
         };
         if force || self.native_progress != progress {
             self.native_progress = progress;
-            if let Err(error) = platform::set_progress(self.native_progress.as_ref(), window) {
+            if let Err(error) = platform::set_progress(self.native_progress.as_ref(), window, cx) {
                 eprintln!("Native progress: {error:#}");
             }
         }
@@ -312,7 +311,7 @@ impl Gui {
                     if view.native_progress.is_none() {
                         let _ = view
                             .window_handle
-                            .update(cx, |_, window, _| platform::set_progress(None, window));
+                            .update(cx, |_, window, cx| platform::set_progress(None, window, cx));
                     }
                 });
             });
@@ -376,7 +375,7 @@ impl Gui {
                         self.request(Request::SetScrollback {
                             megabytes: self.config.scrollback_mb,
                         })?;
-                        self.update_native_progress(window, false);
+                        self.update_native_progress(window, false, cx);
                     }
                 }
                 Update::Output { id, bytes } => {
@@ -432,7 +431,7 @@ impl Gui {
                     }
                     self.order = tabs;
                     self.active = active;
-                    self.update_native_progress(window, false);
+                    self.update_native_progress(window, false, cx);
                 }
                 Update::Error(message) => {
                     self.disconnect();
@@ -1419,9 +1418,9 @@ fn open_window(
     cx.open_window(options, |window, cx| {
         let view = cx.new(|cx| Gui::new(config, session, host, bin, window.window_handle(), cx));
         view.update(cx, |_, cx| {
-            cx.observe_window_activation(window, |view, window, _| {
+            cx.observe_window_activation(window, |view, window, cx| {
                 if window.is_window_active() {
-                    view.update_native_progress(window, true);
+                    view.update_native_progress(window, true, cx);
                 }
             })
             .detach();

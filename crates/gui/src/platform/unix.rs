@@ -8,11 +8,11 @@ pub const WINDOWS_PATHS: bool = false;
 pub fn set_progress(
     _progress: Option<&scytty_common::protocol::Progress>,
     _window: &Window,
+    _cx: &mut App,
 ) -> Result<()> {
     Ok(())
 }
 pub fn clear_progress(_window: WindowId) {}
-pub fn tick_progress(_window: WindowId) {}
 
 pub fn init_notifications() -> Result<()> {
     Ok(())

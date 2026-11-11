@@ -1,61 +1,109 @@
 use anyhow::Result;
 use gpui::{prelude::*, *};
-use objc2::{MainThreadMarker, MainThreadOnly};
-use objc2_app_kit::{NSApplication, NSImageScaling, NSImageView, NSProgressIndicator, NSView};
+use objc2::{MainThreadMarker, MainThreadOnly, rc::Retained};
+use objc2_app_kit::{
+    NSApplication, NSBox, NSBoxType, NSColor, NSImageScaling, NSImageView, NSProgressIndicator,
+    NSTitlePosition, NSView,
+};
 use objc2_foundation::{NSPoint, NSRect, NSSize};
-use std::process::Command;
+use std::{
+    process::Command,
+    time::{Duration, Instant},
+};
 
 pub const OVERLAY_SCROLLBAR: bool = true;
 pub const WINDOWS_PATHS: bool = false;
 
+#[derive(Default)]
+struct DockProgress {
+    owner: Option<WindowId>,
+    value: Option<scytty_common::protocol::Progress>,
+    animation: Option<Task<()>>,
+}
 thread_local! {
-    static DOCK_PROGRESS: std::cell::RefCell<(Option<WindowId>, Option<scytty_common::protocol::Progress>)> = const { std::cell::RefCell::new((None, None)) };
+    static DOCK_PROGRESS: std::cell::RefCell<DockProgress> = std::cell::RefCell::default();
 }
 
 pub fn set_progress(
     progress: Option<&scytty_common::protocol::Progress>,
     window: &Window,
+    cx: &mut App,
 ) -> Result<()> {
     let id = window.window_handle().window_id();
     DOCK_PROGRESS.with_borrow_mut(|state| {
-        if state.0.is_some_and(|owner| owner != id) && !window.is_window_active() {
+        if state.owner.is_some_and(|owner| owner != id) && !window.is_window_active() {
             return;
         }
-        if state.0 == Some(id) && state.1.as_ref() == progress {
+        if state.owner == Some(id) && state.value.as_ref() == progress {
             return;
         }
-        *state = (Some(id), progress.cloned());
-        draw_dock_progress(progress);
+        state.animation = None;
+        state.owner = Some(id);
+        state.value = progress.cloned();
+        if let Some((segment, frame)) = draw_dock_progress(progress) {
+            let started = Instant::now();
+            let mtm = MainThreadMarker::new().expect("Dock progress runs on the main thread");
+            let dock = NSApplication::sharedApplication(mtm).dockTile();
+            state.animation = Some(cx.spawn(async move |cx| {
+                loop {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(33))
+                        .await;
+                    if cx
+                        .update(|_| {
+                            let x = indeterminate_offset(
+                                started.elapsed().as_secs_f64(),
+                                frame.size.width - segment.frame().size.width,
+                            );
+                            segment
+                                .setFrameOrigin(NSPoint::new(frame.origin.x + x, frame.origin.y));
+                            dock.display();
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            }));
+        }
     });
     Ok(())
 }
 
-pub fn tick_progress(window: WindowId) {
-    DOCK_PROGRESS.with_borrow(|state| {
-        if state.0 == Some(window) && state.1.as_ref().is_some_and(|p| p.state == "indeterminate") {
-            let mtm = MainThreadMarker::new().expect("Dock progress runs on the main thread");
-            NSApplication::sharedApplication(mtm).dockTile().display();
-        }
-    });
-}
-
 pub fn clear_progress(window: WindowId) {
     DOCK_PROGRESS.with_borrow_mut(|state| {
-        if state.0 == Some(window) {
-            *state = (None, None);
-            draw_dock_progress(None);
+        if state.owner == Some(window) {
+            *state = DockProgress::default();
+            let _ = draw_dock_progress(None);
         }
     });
 }
 
-fn draw_dock_progress(progress: Option<&scytty_common::protocol::Progress>) {
+fn indeterminate_offset(seconds: f64, available: f64) -> f64 {
+    let phase = seconds.rem_euclid(2.);
+    available.max(0.) * if phase < 1. { phase } else { 2. - phase }
+}
+
+fn dock_box(frame: NSRect, color: &NSColor, mtm: MainThreadMarker) -> Retained<NSBox> {
+    let view = NSBox::initWithFrame(NSBox::alloc(mtm), frame);
+    view.setBoxType(NSBoxType::Custom);
+    view.setTitlePosition(NSTitlePosition::NoTitle);
+    view.setBorderWidth(0.);
+    view.setCornerRadius(frame.size.height / 2.);
+    view.setFillColor(color);
+    view
+}
+
+fn draw_dock_progress(
+    progress: Option<&scytty_common::protocol::Progress>,
+) -> Option<(Retained<NSBox>, NSRect)> {
     let mtm = MainThreadMarker::new().expect("Dock progress runs on the main thread");
     let app = NSApplication::sharedApplication(mtm);
     let dock = app.dockTile();
     let Some(progress) = progress else {
         dock.setContentView(None);
         dock.display();
-        return;
+        return None;
     };
     let dimensions = dock.size();
     let bounds = NSRect::new(NSPoint::new(0., 0.), dimensions);
@@ -68,19 +116,29 @@ fn draw_dock_progress(progress: Option<&scytty_common::protocol::Progress>) {
         NSPoint::new(dimensions.width * 0.08, dimensions.height * 0.04),
         NSSize::new(dimensions.width * 0.84, dimensions.height * 0.10),
     );
+    if progress.state == "indeterminate" {
+        // Dock content has no window to drive NSProgressIndicator's animation.
+        let track = dock_box(frame, &NSColor::colorWithWhite_alpha(0., 0.4), mtm);
+        let segment_frame = NSRect::new(
+            frame.origin,
+            NSSize::new(frame.size.width * 0.28, frame.size.height),
+        );
+        let segment = dock_box(segment_frame, &NSColor::controlAccentColor(), mtm);
+        view.addSubview(&track);
+        view.addSubview(&segment);
+        dock.setContentView(Some(&view));
+        dock.display();
+        return Some((segment, frame));
+    }
     let bar = NSProgressIndicator::initWithFrame(NSProgressIndicator::alloc(mtm), frame);
-    let indeterminate = progress.state == "indeterminate";
-    bar.setIndeterminate(indeterminate);
+    bar.setIndeterminate(false);
     bar.setMinValue(0.);
     bar.setMaxValue(100.);
     bar.setDoubleValue(f64::from(progress.percent.unwrap_or(0).min(100)));
     view.addSubview(&bar);
-    if indeterminate {
-        // No sender is needed for this programmatic action.
-        unsafe { bar.startAnimation(None) };
-    }
     dock.setContentView(Some(&view));
     dock.display();
+    None
 }
 
 pub fn init_notifications() -> Result<()> {
@@ -167,6 +225,16 @@ pub fn hide_console(_command: &mut Command) {}
 
 #[cfg(test)]
 mod notification_tests {
+    #[test]
+    fn indeterminate_segment_moves_back_and_forth_without_becoming_a_percentage() {
+        let positions = [0., 0.5, 1., 1.5, 2.].map(|time| super::indeterminate_offset(time, 72.));
+        assert_eq!(positions, [0., 36., 72., 36., 0.]);
+        for frame in 0..600 {
+            let x = super::indeterminate_offset(f64::from(frame) / 30., 72.);
+            assert!((0. ..=72.).contains(&x));
+        }
+        assert_eq!(super::indeterminate_offset(0.5, 0.), 0.);
+    }
     #[test]
     fn foreground_presentation_callback_is_installed_and_idempotent() -> anyhow::Result<()> {
         use objc2::runtime::{AnyClass, AnyObject, Bool, Sel};

@@ -8,6 +8,7 @@ pub const WINDOWS_PATHS: bool = true;
 pub fn set_progress(
     progress: Option<&scytty_common::protocol::Progress>,
     window: &Window,
+    _cx: &mut App,
 ) -> Result<()> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use windows::Win32::{
@@ -59,7 +60,6 @@ pub fn set_progress(
 }
 
 pub fn clear_progress(_window: WindowId) {}
-pub fn tick_progress(_window: WindowId) {}
 
 pub fn init_notifications() -> Result<()> {
     // Unpackaged Windows apps need an identity registered for toast delivery.
