@@ -474,10 +474,37 @@ impl Gui {
                             .flex_shrink_0()
                             .object_fit(ObjectFit::Contain),
                     )
-                    .children(self.remote_restart.as_ref().map(|_| {
+                    .children(
+                        self.remote_restart
+                            .as_ref()
+                            .and_then(|warning| warning.existing_path.as_ref())
+                            .map(|_| {
+                                error_button(
+                                    "connect-existing-daemon",
+                                    "Connect to existing — preserve sessions",
+                                )
+                                .mt(px(16.))
+                                .on_click(cx.listener(
+                                    |this, _, _, cx| {
+                                        let path = this
+                                            .remote_restart
+                                            .take()
+                                            .and_then(|warning| warning.existing_path);
+                                        if let Some(path) = path {
+                                            this.start_connect_choice(None, Some(path), cx);
+                                        }
+                                    },
+                                ))
+                            }),
+                    )
+                    .children(self.remote_restart.as_ref().map(|warning| {
                         error_button(
                             "restart-remote-daemon",
-                            "Restart with bundled server — ends ALL sessions",
+                            if warning.existing_path.is_some() {
+                                "Upload, restart, and reconnect — ends ALL sessions"
+                            } else {
+                                "Restart with bundled server — ends ALL sessions"
+                            },
                         )
                         .mt(px(16.))
                         .on_click(cx.listener(|this, _, _, cx| {

@@ -129,8 +129,16 @@ pub fn identity() -> Result<()> {
 pub fn check() -> Result<()> {
     match running()? {
         None => println!("stopped"),
-        Some((_, digest)) if digest == hash(&std::env::current_exe()?)? => println!("same"),
-        Some((pid, digest)) => println!("old {pid} {digest}"),
+        Some((pid, digest)) => {
+            let mut socket = UnixStream::connect(scytty_common::connection::socket_path()?)?;
+            socket.set_read_timeout(Some(Duration::from_secs(5)))?;
+            socket.set_write_timeout(Some(Duration::from_secs(5)))?;
+            if scytty_common::protocol::handshake(&mut socket).is_ok() {
+                println!("same");
+            } else {
+                println!("old {pid} {digest}");
+            }
+        }
     }
     Ok(())
 }

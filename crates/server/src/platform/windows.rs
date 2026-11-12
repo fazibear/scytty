@@ -33,8 +33,16 @@ pub mod daemon {
     pub fn check() -> Result<()> {
         match connection::daemon_status()? {
             None => println!("stopped"),
-            Some((_, digest)) if digest == connection::executable_digest()? => println!("same"),
-            Some((pid, digest)) => println!("old {pid} {}", hex(&digest)),
+            Some((pid, digest)) => {
+                let mut stream = connection::connect()?;
+                stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
+                stream.set_write_timeout(Some(std::time::Duration::from_secs(5)))?;
+                if scytty_common::protocol::handshake(&mut stream).is_ok() {
+                    println!("same");
+                } else {
+                    println!("old {pid} {}", hex(&digest));
+                }
+            }
         }
         Ok(())
     }

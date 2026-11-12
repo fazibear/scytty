@@ -99,7 +99,11 @@ fn daemon_upgrade_requires_confirmation() -> Result<()> {
             .spawn()?,
     );
     wait(&daemon.home)?;
-    let old_status = status(&daemon.home)?;
+    // A different executable with the same protocol must preserve running sessions.
+    assert_eq!(status(&daemon.home)?, "same");
+    let identity = command(&daemon.home).arg("--daemon-identity").output()?;
+    assert!(identity.status.success());
+    let old_status = String::from_utf8(identity.stdout)?;
     let fields: Vec<_> = old_status.split_whitespace().collect();
     assert_eq!(fields[0], "old");
     assert_eq!(

@@ -24,7 +24,19 @@ pub fn connect_session(
     session: String,
     bin: Option<String>,
 ) -> Result<Connected> {
+    connect_session_choice(host, session, bin, None)
+}
+
+pub fn connect_session_choice(
+    host: Option<String>,
+    session: String,
+    bin: Option<String>,
+    existing_path: Option<String>,
+) -> Result<Connected> {
     let connection = match host.as_deref() {
+        Some(host) if existing_path.is_some() => {
+            remote::connect_existing(host, existing_path.as_deref().unwrap())?
+        }
         Some(host) => connect(host)?,
         None => connect_local()?,
     };
@@ -95,7 +107,7 @@ fn connect_local() -> Result<Connection> {
 }
 
 pub fn connect(host: &str) -> Result<Connection> {
-    bridge(crate::remote::command(host)?)
+    crate::remote::connect(host)
 }
 
 pub(crate) fn bridge(mut command: Command) -> Result<Connection> {

@@ -376,9 +376,15 @@ hosts are Linux and macOS, each on x86_64 or ARM64. The host needs a POSIX shell
 standard Unix utilities, SSH access and permission to execute files under HOME;
 no Rust toolchain or server on PATH is required.
 
-Before attaching, Scytty compares the running daemon's executable with the
-bundled server. An identical daemon is reused. A different daemon produces a
-warning with an explicit **Restart with bundled server** button. **Restarting
+Platform detection, cache selection, optional upload and the stdio bridge share
+one SSH connection. Uploads use the remote system's `/usr/bin/base64` decoder.
+Before uploading, Scytty checks cached servers and the running daemon's protocol.
+An identical build is reused. For a protocol-compatible daemon with a different
+build, choose **Connect to existing — preserve sessions** or
+**Upload, restart, and reconnect — ends ALL sessions**. No upload happens before
+that choice. If this client has no bundled server for the platform, a compatible
+cached server can still be used. An incompatible daemon offers only
+**Restart with bundled server**. **Restarting
 ends ALL sessions and shells on that remote host.** Closing the window instead
 leaves the daemon untouched. Confirmation rechecks the daemon PID and SHA-256
 before terminating it, then the client connects and starts the bundled version.

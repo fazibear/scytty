@@ -19,9 +19,17 @@ pub(crate) struct RestartRequired {
     pid: u32,
     digest: String,
     local: bool,
+    pub(crate) existing_path: Option<String>,
 }
 impl std::fmt::Display for RestartRequired {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.existing_path.is_some() {
+            return write!(
+                f,
+                "A protocol-compatible Scytty daemon with a different build is running on {} (PID {}). Connect to it to preserve sessions, or upload the bundled server and restart. Restarting ends ALL sessions and shells.",
+                self.host, self.pid
+            );
+        }
         write!(
             f,
             "A different Scytty daemon is running on {} (PID {}). Restarting with the bundled server will end ALL sessions and shells. Close this window to leave it running.",
@@ -32,6 +40,16 @@ impl std::fmt::Display for RestartRequired {
 impl std::error::Error for RestartRequired {}
 impl RestartRequired {
     pub fn restart(&self) -> Result<()> {
+        if self.existing_path.is_some() {
+            let error = prepare_inspecting(&self.host, OsStr::new("ssh"), SERVERS, true)
+                .err()
+                .context("daemon changed; reconnect before restarting")?;
+            let warning = error.downcast::<RestartRequired>()?;
+            if warning.pid != self.pid || warning.digest != self.digest {
+                bail!("daemon changed since confirmation; reconnect and confirm again");
+            }
+            return warning.restart();
+        }
         let script = format!(
             "exec \"{}\" --restart-daemon {} {}",
             self.path, self.pid, self.digest
@@ -88,10 +106,159 @@ fn ssh(program: &OsStr, host: &str, script: &str) -> Command {
     command
 }
 
-pub(crate) fn command(host: &str) -> Result<Command> {
-    prepare(host, OsStr::new("ssh"), SERVERS)
+pub(crate) fn connect_existing(host: &str, path: &str) -> Result<super::transport::Connection> {
+    super::transport::validate_host(host)?;
+    let quoted = path.replace('\'', "'\\''");
+    super::transport::bridge(ssh(
+        OsStr::new("ssh"),
+        host,
+        &format!("exec '{quoted}' --stdio"),
+    ))
 }
 
+pub(crate) fn connect(host: &str) -> Result<super::transport::Connection> {
+    bootstrap(host, OsStr::new("ssh"), SERVERS)
+}
+
+fn bootstrap(
+    host: &str,
+    program: &OsStr,
+    servers: &[Server],
+) -> Result<super::transport::Connection> {
+    use base64::Engine;
+    use std::io::Read;
+    super::transport::validate_host(host)?;
+    let mut choices = String::new();
+    for server in servers {
+        choices.push_str(&format!(
+            "{} ) digest={};;\n",
+            server.platform, server.digest
+        ));
+    }
+    let script = format!(
+        r#"set -eu
+case "$(uname -s):$(uname -m)" in
+ Linux:x86_64|Linux:amd64) platform=linux-x86_64;;
+ Linux:aarch64|Linux:arm64) platform=linux-arm64;;
+ Darwin:arm64|Darwin:aarch64) platform=macos-arm64;;
+ Darwin:x86_64) platform=macos-x86_64;;
+ *) echo 'unsupported remote platform' >&2; exit 1;;
+esac
+digest=
+case "$platform" in
+{choices}
+esac
+for server in "$HOME"/.scytty/servers/"$platform"-*/scytty-server; do
+ [ -x "$server" ] || continue
+ if [ "$("$server" --check-daemon 2>/dev/null)" = same ]; then
+  identity=$("$server" --daemon-identity)
+  if [ -n "$digest" ] && [ "${{identity##* }}" != "$digest" ]; then
+   printf 'CHOICE %s\n%s\n' "$server" "$identity"
+   exit 0
+  fi
+  echo READY
+  exec "$server" --stdio
+ fi
+done
+case "$platform" in
+{choices}
+ *) echo 'this build does not embed a server for this platform' >&2; exit 1;;
+esac
+directory="$HOME/.scytty/servers/$platform-$digest"
+server="$directory/scytty-server"
+if [ ! -x "$server" ]; then
+ umask 077
+ for dir in "$HOME/.scytty" "$HOME/.scytty/servers" "$directory"; do
+  if [ ! -e "$dir" ]; then mkdir -p "$dir"; fi
+  [ -d "$dir" ] && [ ! -L "$dir" ] && [ -O "$dir" ] || {{ echo 'unsafe Scytty cache directory' >&2; exit 1; }}
+  chmod 700 "$dir"
+ done
+ tmp=$(mktemp "$directory/.upload.XXXXXXXX")
+ trap 'rm -f "$tmp" "$tmp.b64"' EXIT HUP INT TERM
+ printf 'UPLOAD %s\n' "$platform"
+ complete=false
+ while IFS= read -r line; do
+  if [ "$line" = SCYTTY_UPLOAD_END ]; then complete=true; break; fi
+  printf '%s\n' "$line" >> "$tmp.b64"
+ done
+ [ "$complete" = true ] || exit 1
+ /usr/bin/base64 -d < "$tmp.b64" > "$tmp"
+ chmod 700 "$tmp"
+ mv -f "$tmp" "$server"
+ rm -f "$tmp.b64"
+ trap - EXIT HUP INT TERM
+fi
+status=$("$server" --check-daemon)
+case "$status" in
+ same|stopped) echo READY; exec "$server" --stdio;;
+ *) printf 'STATUS %s\n%s\n' "$server" "$status";;
+esac
+"#
+    );
+    let mut connection = super::transport::bridge(ssh(program, host, &script))?;
+    connection
+        .socket
+        .set_read_timeout(Some(std::time::Duration::from_secs(60)))?;
+    connection
+        .socket
+        .set_write_timeout(Some(std::time::Duration::from_secs(60)))?;
+    fn line(stream: &mut impl Read) -> Result<String> {
+        let mut bytes = Vec::new();
+        loop {
+            let mut byte = [0];
+            stream
+                .read_exact(&mut byte)
+                .context("SSH bootstrap ended before attachment; check SSH output")?;
+            if byte[0] == b'\n' {
+                return Ok(String::from_utf8(bytes)?);
+            }
+            if bytes.len() >= 8192 {
+                bail!("oversized SSH bootstrap response");
+            }
+            bytes.push(byte[0]);
+        }
+    }
+    let mut uploaded = false;
+    loop {
+        let response = line(&mut connection.socket)?;
+        if response == "READY" {
+            connection.socket.set_read_timeout(None)?;
+            connection.socket.set_write_timeout(None)?;
+            return Ok(connection);
+        }
+        if let Some(platform) = response.strip_prefix("UPLOAD ") {
+            if uploaded {
+                bail!("repeated SSH upload request");
+            }
+            let server = servers
+                .iter()
+                .find(|server| server.platform == platform)
+                .context("unsupported SSH upload platform")?;
+            for chunk in server.bytes.chunks(48 * 1024) {
+                let encoded = base64::engine::general_purpose::STANDARD.encode(chunk);
+                writeln!(connection.socket, "{encoded}")?;
+            }
+            writeln!(connection.socket, "SCYTTY_UPLOAD_END")?;
+            uploaded = true;
+        } else if let Some(path) = response.strip_prefix("CHOICE ") {
+            let status = line(&mut connection.socket)?;
+            let error = check_status(status.as_bytes(), host, path.into(), false)
+                .err()
+                .context("invalid compatible daemon identity")?;
+            let mut warning = error.downcast::<RestartRequired>()?;
+            warning.existing_path = Some(path.into());
+            return Err(warning.into());
+        } else if let Some(path) = response.strip_prefix("STATUS ") {
+            let status = line(&mut connection.socket)?;
+            check_status(status.as_bytes(), host, path.into(), false)?;
+            bail!("unexpected SSH daemon status");
+        } else {
+            bail!("invalid SSH bootstrap response: {response:?}");
+        }
+    }
+}
+
+#[cfg(test)]
 fn prepare(host: &str, program: &OsStr, servers: &[Server]) -> Result<Command> {
     prepare_inspecting(host, program, servers, false)
 }
@@ -138,6 +305,38 @@ fn prepare_inspecting(
         );
     }
     let platform = platform(&detected.stdout)?;
+    if !inspect {
+        let probe = format!(
+            r#"for server in "$HOME"/.scytty/servers/{platform}-*/scytty-server; do
+    [ -x "$server" ] || continue
+    if [ "$("$server" --check-daemon 2>/dev/null)" = same ]; then
+        printf '%s\n' "$server"
+        exit 0
+    fi
+done
+exit 1"#
+        );
+        let cached = ssh(program, host, &probe)
+            .stdin(Stdio::null())
+            .output()
+            .context("could not check compatible cached servers")?;
+        if cached.status.success() {
+            let path = std::str::from_utf8(&cached.stdout)
+                .context("invalid cached server path")?
+                .trim_end_matches('\n');
+            if path.is_empty() || path.contains(['\n', '\r']) {
+                bail!("invalid cached server path");
+            }
+            let quoted = path.replace('\'', "'\\''");
+            return Ok(ssh(program, host, &format!("exec '{quoted}' --stdio")));
+        }
+        if cached.status.code() != Some(1) {
+            bail!(
+                "SSH compatible server check failed: {}",
+                String::from_utf8_lossy(&cached.stderr).trim()
+            );
+        }
+    }
     let server = servers.iter().find(|server| server.platform == platform)
         .with_context(|| format!("this build does not embed a {platform} server; use an official release or build with SCYTTY_SERVER_BUNDLE (see README)"))?;
     // Only build-generated platform names and SHA-256 hex enter the remote shell.
@@ -228,6 +427,7 @@ fn check_status(status: &[u8], host: &str, path: String, local: bool) -> Result<
                     pid,
                     digest: (*digest).into(),
                     local,
+                    existing_path: None,
                 }
                 .into());
             }
@@ -240,6 +440,76 @@ fn check_status(status: &[u8], host: &str, path: String, local: bool) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn single_connection_bootstrap() -> Result<()> {
+        use std::{fs, io::Read, os::unix::fs::PermissionsExt};
+        let root = std::env::temp_dir().join(format!(
+            "scytty-bootstrap-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_nanos()
+        ));
+        fs::create_dir(&root)?;
+        let ssh = root.join("ssh");
+        let home = root.to_str().unwrap().replace('\'', "'\\''");
+        fs::write(
+            &ssh,
+            format!(
+                "#!/bin/sh\nexport HOME='{home}'\necho connection >> \"$HOME/connections\"\nfor arg; do :; done\nexec /bin/sh -c \"$arg\"\n"
+            ),
+        )?;
+        fs::set_permissions(&ssh, fs::Permissions::from_mode(0o700))?;
+        let bytes = b"#!/bin/sh\ncase \"$1\" in\n--check-daemon) echo same;;\n--daemon-identity) echo old 123 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa;;\n*) exec cat;;\nesac\n";
+        let servers: Vec<_> = ["linux-x86_64", "linux-arm64", "macos-x86_64", "macos-arm64"]
+            .into_iter()
+            .map(|platform| Server {
+                platform,
+                digest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                bytes,
+            })
+            .collect();
+        for bundle in [&servers[..], &[][..]] {
+            let mut connection = bootstrap("host", ssh.as_os_str(), bundle)?;
+            connection
+                .socket
+                .set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
+            connection.socket.write_all(b"\x00terminal\xff\n")?;
+            let mut response = [0; 11];
+            connection.socket.read_exact(&mut response)?;
+            assert_eq!(&response, b"\x00terminal\xff\n");
+        }
+        assert_eq!(
+            fs::read_to_string(root.join("connections"))?
+                .lines()
+                .count(),
+            2
+        );
+        let different: Vec<_> = servers
+            .iter()
+            .map(|server| Server {
+                platform: server.platform,
+                digest: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                bytes: b"must not upload before approval",
+            })
+            .collect();
+        let error = match bootstrap("host", ssh.as_os_str(), &different) {
+            Ok(_) => panic!("different compatible build must offer a choice"),
+            Err(error) => error,
+        };
+        let warning = error.downcast::<RestartRequired>()?;
+        assert_eq!(warning.pid, 123);
+        assert!(warning.existing_path.is_some());
+        assert!(warning.to_string().contains("protocol-compatible"));
+        assert!(warning.to_string().contains("ALL sessions"));
+        for entry in fs::read_dir(root.join(".scytty/servers"))? {
+            assert!(!entry?.file_name().to_string_lossy().contains("bbbbbbbb"));
+        }
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
 
     #[test]
     fn remote_platforms() {
@@ -344,11 +614,26 @@ mod tests {
         );
         fs::write(root.0.join("status"), "same\n")?;
         assert!(prepare("host", ssh.as_os_str(), &servers).is_ok());
+        // A compatible cached build avoids uploading a different bundled build,
+        // and works even if this client has no server bundle for the host.
+        assert!(prepare("host", ssh.as_os_str(), &[]).is_ok());
+        let different = [Server {
+            platform: "linux-x86_64",
+            digest: "different",
+            bytes: b"must not upload",
+        }];
+        assert!(prepare("host", ssh.as_os_str(), &different).is_ok());
         assert!(
-            prepare("host", ssh.as_os_str(), &[])
-                .unwrap_err()
-                .to_string()
-                .contains("does not embed")
+            !root
+                .0
+                .join(".scytty/servers/linux-x86_64-different")
+                .exists()
+        );
+        assert_eq!(
+            fs::read_to_string(root.0.join("commands"))?
+                .matches("tmp=$(mktemp")
+                .count(),
+            1
         );
         // Refuse cache-directory symlinks instead of writing through them.
         fs::remove_dir_all(root.0.join(".scytty/servers"))?;

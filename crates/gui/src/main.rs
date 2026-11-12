@@ -176,6 +176,15 @@ impl Gui {
         view
     }
     fn start_connect(&mut self, restart: Option<remote::RestartRequired>, cx: &mut Context<Self>) {
+        self.start_connect_choice(restart, None, cx);
+    }
+
+    fn start_connect_choice(
+        &mut self,
+        restart: Option<remote::RestartRequired>,
+        existing_path: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
         self.connecting = true;
         self.error = None;
         self.remote_restart = None;
@@ -187,7 +196,11 @@ impl Gui {
             if let Some(warning) = restart {
                 warning.restart()?;
             }
-            transport::connect_session(host, session, bin)
+            if existing_path.is_some() {
+                transport::connect_session_choice(host, session, bin, existing_path)
+            } else {
+                transport::connect_session(host, session, bin)
+            }
         });
         cx.spawn(async move |view, cx| {
             let result = task.await;
