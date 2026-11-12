@@ -801,16 +801,40 @@ impl Gui {
         self.report(result, cx);
     }
     fn scroll(&mut self, event: &ScrollWheelEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(tab) = self.tabs.get_mut(&self.active) {
-            self.scrollbar_last_used = Instant::now();
-            let delta = event.delta.pixel_delta(self.cell.height);
-            tab.terminal
-                .scroll_viewport(ScrollViewport::Delta(scroll_rows(
+        let result = (|| -> Result<()> {
+            if let Some(tab) = self.tabs.get_mut(&self.active) {
+                self.scrollbar_last_used = Instant::now();
+                let delta = event.delta.pixel_delta(self.cell.height);
+                let rows = scroll_rows(
                     &mut self.scroll_remainder,
                     f32::from(delta.y) / f32::from(self.cell.height),
-                )));
-            cx.notify();
-        }
+                );
+                let mut mods = key::Mods::empty();
+                if event.modifiers.shift {
+                    mods |= key::Mods::SHIFT;
+                }
+                if event.modifiers.control {
+                    mods |= key::Mods::CTRL;
+                }
+                if event.modifiers.alt {
+                    mods |= key::Mods::ALT;
+                }
+                let bytes = tab.scroll(
+                    rows,
+                    ghostty_vt::mouse::Position {
+                        x: f32::from(event.position.x - self.bounds.left()).max(0.),
+                        y: f32::from(event.position.y - self.bounds.top()).max(0.),
+                    },
+                    self.cell,
+                    mods,
+                )?;
+                if !bytes.is_empty() {
+                    self.input(&bytes)?;
+                }
+            }
+            Ok(())
+        })();
+        self.report(result, cx);
     }
     fn paint(
         &mut self,

@@ -69,6 +69,65 @@ impl Tab {
             exited: false,
         })
     }
+    pub(super) fn scroll(
+        &mut self,
+        rows: isize,
+        position: ghostty_vt::mouse::Position,
+        cell: Size<Pixels>,
+        mods: key::Mods,
+    ) -> Result<Vec<u8>> {
+        use ghostty_vt::{mouse, screen::Screen, terminal::Mode};
+        let mut bytes = Vec::new();
+        if rows == 0 {
+            return Ok(bytes);
+        }
+        if !mods.contains(key::Mods::SHIFT) && self.terminal.is_mouse_tracking()? {
+            let mut encoder = mouse::Encoder::new()?;
+            encoder
+                .set_options_from_terminal(&self.terminal)
+                .set_size(mouse::EncoderSize {
+                    screen_width: u32::from(self.size.0) * (f32::from(cell.width) as u32).max(1),
+                    screen_height: u32::from(self.size.1) * (f32::from(cell.height) as u32).max(1),
+                    cell_width: (f32::from(cell.width) as u32).max(1),
+                    cell_height: (f32::from(cell.height) as u32).max(1),
+                    padding_top: 0,
+                    padding_bottom: 0,
+                    padding_left: 0,
+                    padding_right: 0,
+                });
+            let mut event = mouse::Event::new()?;
+            event
+                .set_action(mouse::Action::Press)
+                .set_button(Some(if rows < 0 {
+                    mouse::Button::Four
+                } else {
+                    mouse::Button::Five
+                }))
+                .set_position(position)
+                .set_mods(mods);
+            for _ in 0..rows.unsigned_abs() {
+                encoder.encode_to_vec(&event, &mut bytes)?;
+            }
+        } else if !mods.contains(key::Mods::SHIFT)
+            && self.terminal.active_screen()? == Screen::Alternate
+            && self.terminal.mode(Mode::ALT_SCROLL)?
+        {
+            self.encoder.set_options_from_terminal(&self.terminal);
+            let mut event = key::Event::new()?;
+            event.set_key(if rows < 0 {
+                key::Key::ArrowUp
+            } else {
+                key::Key::ArrowDown
+            });
+            for _ in 0..rows.unsigned_abs() {
+                self.encoder.encode_to_vec(&event, &mut bytes)?;
+            }
+        } else {
+            self.terminal.scroll_viewport(ScrollViewport::Delta(rows));
+        }
+        Ok(bytes)
+    }
+
     pub(super) fn request_resize(
         &mut self,
         size: (u16, u16, u32, u32),
@@ -264,6 +323,74 @@ mod tests {
     use ghostty_vt::selection::Selection;
     use ghostty_vt::terminal::{Point as TerminalPoint, PointCoordinate};
     use gpui::{point, px, size};
+    #[test]
+    fn wheel_reports_to_apps_and_shift_keeps_local_scrolling() -> Result<()> {
+        let mut tab = Tab::new(Terminal::new(TerminalOptions::default())?)?;
+        tab.size = (80, 24, 10, 20);
+        let position = ghostty_vt::mouse::Position { x: 15., y: 25. };
+        let cell = size(px(10.), px(20.));
+        assert!(
+            tab.scroll(1, position, cell, key::Mods::empty())?
+                .is_empty()
+        );
+        tab.terminal.vt_write(b"\x1b[?1000h\x1b[?1006h");
+        assert_eq!(
+            tab.scroll(-2, position, cell, key::Mods::empty())?,
+            b"\x1b[<64;2;2M\x1b[<64;2;2M"
+        );
+        assert_eq!(
+            tab.scroll(1, position, cell, key::Mods::empty())?,
+            b"\x1b[<65;2;2M"
+        );
+        assert!(tab.scroll(1, position, cell, key::Mods::SHIFT)?.is_empty());
+        assert!(
+            tab.scroll(0, position, cell, key::Mods::empty())?
+                .is_empty()
+        );
+        tab.terminal.vt_write(b"\x1b[?1000l\x1b[?1049h\x1b[?1007h");
+        assert_eq!(
+            tab.scroll(-1, position, cell, key::Mods::empty())?,
+            b"\x1b[A"
+        );
+        tab.terminal.vt_write(b"\x1b[?1h");
+        assert_eq!(
+            tab.scroll(1, position, cell, key::Mods::empty())?,
+            b"\x1bOB"
+        );
+        tab.terminal.vt_write(b"\x1b[?1007l");
+        assert!(
+            tab.scroll(1, position, cell, key::Mods::empty())?
+                .is_empty()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn wheel_modes_survive_reconnect_snapshot() -> Result<()> {
+        let mut terminal = Terminal::new(TerminalOptions::default())?;
+        assert!(
+            terminal.mode(ghostty_vt::terminal::Mode::ALT_SCROLL)?,
+            "alternate scrolling must default on"
+        );
+        terminal.vt_write(b"\x1b[?1049h\x1b[?1002h\x1b[?1006h");
+        let mut bytes = Vec::new();
+        ghostty_vt::snapshot::encode_to(&terminal, &mut bytes)?;
+        let terminal = ghostty_vt::snapshot::Decoder::from_slice(&bytes).decode()?;
+        assert!(terminal.is_mouse_tracking()?);
+        let mut tab = Tab::new(terminal)?;
+        tab.size = (80, 24, 10, 20);
+        assert_eq!(
+            tab.scroll(
+                -1,
+                ghostty_vt::mouse::Position { x: 15., y: 25. },
+                size(px(10.), px(20.)),
+                key::Mods::empty()
+            )?,
+            b"\x1b[<64;2;2M"
+        );
+        Ok(())
+    }
+
     #[test]
     fn terminal_decorations_include_spaces_wide_cells_colors_and_resets() -> Result<()> {
         use ghostty_vt::style::Underline;
