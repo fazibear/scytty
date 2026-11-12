@@ -122,7 +122,7 @@ The GUI evaluates `~/.config/scytty/config.lua` with bundled **LuaJIT** on start
 return {
   font_size = 16,
   default_cursor_style = "block",
-  background_opacity = 0.8,
+  background_opacity = 0.7,
   window_width = 960,
   window_height = 640,
 }

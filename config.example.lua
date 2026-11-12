@@ -5,7 +5,7 @@ return {
   scrollback_mb = 16, -- Per-tab MiB, 0–64; 0 disables scrollback.
   font_family = "monospace", -- Or an installed family name.
   icon_scale = 1.4, -- Nerd Font icons followed by a space (1–3).
-  background_opacity = 0.8,
+  background_opacity = 0.7,
   window_width = 960,
   window_height = 640,
 

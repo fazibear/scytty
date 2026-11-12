@@ -60,7 +60,7 @@ impl Default for Config {
             scrollback_mb: 16,
             font_family: "monospace".into(),
             icon_scale: 1.5,
-            background_opacity: 0.8,
+            background_opacity: 0.7,
             window_width: 960.0,
             window_height: 640.0,
             status,

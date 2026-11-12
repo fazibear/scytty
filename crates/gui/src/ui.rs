@@ -15,14 +15,18 @@ fn message_line_rows(line: &str, breaks: impl Iterator<Item = usize>) -> Vec<Str
 fn error_button(id: &'static str, label: &'static str) -> Stateful<Div> {
     div()
         .id(id)
-        .mt(px(8.))
-        .p(px(8.))
-        .rounded_xl()
-        .bg(rgb(0x38204f))
-        .border_2()
-        .border_color(rgb(0xac50f5))
-        .text_color(rgb(0xffffff))
-        .font_weight(FontWeight::BOLD)
+        .px(px(16.))
+        .py(px(9.))
+        .rounded(px(8.))
+        .bg(rgb(0x30213f))
+        .border_1()
+        .border_color(rgb(0x785494))
+        .text_size(px(14.))
+        .text_color(rgb(0xf4edf9))
+        .font_weight(FontWeight::MEDIUM)
+        .flex_shrink_0()
+        .hover(|style| style.bg(rgb(0x463057)).border_color(rgb(0xac78d4)))
+        .active(|style| style.bg(rgb(0x251830)).border_color(rgb(0xc79aeb)))
         .cursor_pointer()
         .child(label)
 }
@@ -474,56 +478,62 @@ impl Gui {
                             .flex_shrink_0()
                             .object_fit(ObjectFit::Contain),
                     )
-                    .children(
-                        self.remote_restart
-                            .as_ref()
-                            .and_then(|warning| warning.existing_path.as_ref())
-                            .map(|_| {
-                                error_button(
-                                    "connect-existing-daemon",
-                                    "Connect to existing — preserve sessions",
+                    .children(self.remote_restart.as_ref().map(|warning| {
+                        div()
+                            .flex()
+                            .mt(px(8.))
+                            .gap(px(8.))
+                            .when(warning.existing_path.is_some(), |row| {
+                                row.child(
+                                    error_button("connect-existing-daemon", "Connect to existing")
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            let path = this
+                                                .remote_restart
+                                                .take()
+                                                .and_then(|warning| warning.existing_path);
+                                            if let Some(path) = path {
+                                                this.start_connect_choice(None, Some(path), cx);
+                                            }
+                                        })),
                                 )
-                                .mt(px(16.))
+                            })
+                            .child(
+                                error_button(
+                                    "restart-remote-daemon",
+                                    if warning.existing_path.is_some() {
+                                        "Upload and restart"
+                                    } else {
+                                        "Restart server"
+                                    },
+                                )
                                 .on_click(cx.listener(
                                     |this, _, _, cx| {
-                                        let path = this
-                                            .remote_restart
-                                            .take()
-                                            .and_then(|warning| warning.existing_path);
-                                        if let Some(path) = path {
-                                            this.start_connect_choice(None, Some(path), cx);
-                                        }
+                                        let Some(warning) = this.remote_restart.take() else {
+                                            return;
+                                        };
+                                        this.start_connect(Some(warning), cx);
+                                    },
+                                )),
+                            )
+                    }))
+                    .child(
+                        div()
+                            .flex()
+                            .mt(px(8.))
+                            .gap(px(8.))
+                            .when(!self.connecting, |row| {
+                                row.child(error_button("copy-error", "Copy error").on_click(
+                                    move |_, _, cx| {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(
+                                            error.clone(),
+                                        ))
                                     },
                                 ))
-                            }),
-                    )
-                    .children(self.remote_restart.as_ref().map(|warning| {
-                        error_button(
-                            "restart-remote-daemon",
-                            if warning.existing_path.is_some() {
-                                "Upload, restart, and reconnect — ends ALL sessions"
-                            } else {
-                                "Restart with bundled server — ends ALL sessions"
-                            },
-                        )
-                        .mt(px(16.))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            let Some(warning) = this.remote_restart.take() else {
-                                return;
-                            };
-                            this.start_connect(Some(warning), cx);
-                        }))
-                    }))
-                    .when(!self.connecting, |panel| {
-                        panel.child(error_button("copy-error", "Copy error").on_click(
-                            move |_, _, cx| {
-                                cx.write_to_clipboard(ClipboardItem::new_string(error.clone()))
-                            },
-                        ))
-                    })
-                    .child(
-                        error_button("close-error", "Close window")
-                            .on_click(|_, window, _| window.remove_window()),
+                            })
+                            .child(
+                                error_button("close-error", "Close window")
+                                    .on_click(|_, window, _| window.remove_window()),
+                            ),
                     ),
             )
     }
