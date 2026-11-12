@@ -67,11 +67,5 @@ pub mod daemon {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn windows_shell_uses_comspec_without_unix_login_flags() {
-        let shell = shell();
-        assert_eq!(shell.get_argv().len(), 1);
-    }
-}
+#[path = "../../tests/unit/platform/windows.rs"]
+mod tests;
