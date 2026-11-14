@@ -24,6 +24,7 @@ mod cursor;
 mod find;
 mod fonts;
 mod images;
+mod keyboard;
 mod links;
 mod notifications;
 mod paths;
@@ -85,6 +86,7 @@ struct Gui {
     scroll_remainder: f32,
     horizontal_scroll_remainder: f32,
     reported_mouse_buttons: Vec<(u64, MouseButton)>,
+    keyboard: keyboard::Keyboard,
     scroll_drag: Option<(u64, Pixels)>,
     link_press: Option<(gpui::Point<Pixels>, String)>,
     link_hovered: Option<gpui::Point<Pixels>>,
@@ -135,6 +137,7 @@ impl Gui {
             scroll_remainder: 0.,
             horizontal_scroll_remainder: 0.,
             reported_mouse_buttons: Vec::new(),
+            keyboard: keyboard::Keyboard::default(),
             scroll_drag: None,
             link_press: None,
             link_hovered: None,
@@ -267,13 +270,13 @@ impl Gui {
         )
     }
     fn input(&mut self, bytes: &[u8]) -> Result<()> {
-        if self.connecting {
+        self.input_for(self.active, bytes)
+    }
+    fn input_for(&mut self, id: u64, bytes: &[u8]) -> Result<()> {
+        if bytes.is_empty() || self.connecting {
             return Ok(());
         }
-        let tab = self
-            .tabs
-            .get_mut(&self.active)
-            .context("Waiting for terminal")?;
+        let tab = self.tabs.get_mut(&id).context("Waiting for terminal")?;
         if tab.exited {
             return Ok(());
         }
@@ -282,7 +285,7 @@ impl Gui {
         tab.anchor = None;
         tab.terminal.scroll_viewport(ScrollViewport::Bottom);
         self.request(Request::Input {
-            id: self.active,
+            id,
             bytes: bytes.to_vec(),
         })
     }
@@ -304,6 +307,7 @@ impl Gui {
     }
     fn disconnect(&mut self) {
         self.reported_mouse_buttons.clear();
+        self.keyboard.clear();
         self.updates = None;
         self.writer = None;
         self.connection = None;
@@ -473,9 +477,10 @@ impl Gui {
                 }
             }
         }
-        Ok(())
+        self.report_focus(window.is_window_active())
     }
     fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.keyboard.sync(window.modifiers(), window.capslock().on);
         let stroke = &event.keystroke;
         if self.plus_menu_position.is_some() {
             match stroke.key.as_str() {
@@ -599,7 +604,15 @@ impl Gui {
                 },
             )
         } else {
-            self.encode_key(stroke).transpose()
+            self.encode_key(
+                stroke,
+                if event.is_held {
+                    key::Action::Repeat
+                } else {
+                    key::Action::Press
+                },
+            )
+            .transpose()
         };
         if let Some(result) = result {
             cx.stop_propagation();
@@ -626,51 +639,98 @@ impl Gui {
         }
         Ok(())
     }
-    fn encode_key(&mut self, stroke: &Keystroke) -> Result<Option<()>> {
-        let Some(tab) = self.tabs.get_mut(&self.active) else {
+    fn encode_key(&mut self, stroke: &Keystroke, action: key::Action) -> Result<Option<()>> {
+        let mut stroke = stroke.clone();
+        stroke.modifiers.shift |= self.keyboard.shift();
+        let stroke = &stroke;
+        let id = self.keyboard.target(stroke).unwrap_or(self.active);
+        let Some(tab) = self.tabs.get_mut(&id).filter(|tab| !tab.exited) else {
             return Ok(None);
         };
-        let m = stroke.modifiers;
-        if let Some(k) = terminal_key(&stroke.key) {
-            let mut event = key::Event::new()?;
-            let mut mods = key::Mods::empty();
-            if m.shift {
-                mods |= key::Mods::SHIFT;
-            }
-            if m.control {
-                mods |= key::Mods::CTRL;
-            }
-            if m.alt {
-                mods |= key::Mods::ALT;
-            }
-            event.set_key(k).set_mods(mods);
-            let mut bytes = Vec::new();
-            tab.encoder
-                .set_options_from_terminal(&tab.terminal)
-                .encode_to_vec(&event, &mut bytes)?;
-            self.input(&bytes)?;
-            return Ok(Some(()));
+        let Some(bytes) = keyboard::encode(
+            &tab.terminal,
+            &mut tab.encoder,
+            stroke,
+            action,
+            !self.marked.is_empty(),
+            self.keyboard.caps_lock,
+        )?
+        else {
+            return Ok(None);
+        };
+        self.input_for(id, &bytes)?;
+        if !self.connecting {
+            self.keyboard.remember(id, stroke);
         }
-        if m.control && !m.alt && stroke.key.len() == 1 {
-            let ch = stroke.key.as_bytes()[0];
-            if ch.is_ascii_alphabetic() {
-                self.input(&[ch.to_ascii_uppercase() & 0x1f])?;
-                return Ok(Some(()));
+        Ok(Some(()))
+    }
+    fn send_key_release(&mut self, id: u64, stroke: &Keystroke) -> Result<()> {
+        let Some(tab) = self.tabs.get_mut(&id).filter(|tab| !tab.exited) else {
+            return Ok(());
+        };
+        if let Some(bytes) = keyboard::encode(
+            &tab.terminal,
+            &mut tab.encoder,
+            stroke,
+            key::Action::Release,
+            false,
+            self.keyboard.caps_lock,
+        )? {
+            self.request(Request::Input { id, bytes })?;
+        }
+        Ok(())
+    }
+    fn key_up(&mut self, event: &KeyUpEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.keyboard.caps_lock = window.capslock().on;
+        let mut released = event.keystroke.clone();
+        released.modifiers.shift |= window.modifiers().shift;
+        if let Some((id, stroke)) = self.keyboard.release(&released) {
+            let result = self.send_key_release(id, &stroke);
+            self.report(result, cx);
+            cx.stop_propagation();
+        }
+    }
+    fn modifiers_changed(
+        &mut self,
+        event: &ModifiersChangedEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        for (stroke, action) in self.keyboard.modifiers_changed(event) {
+            if action == key::Action::Release {
+                self.key_up(&KeyUpEvent { keystroke: stroke }, window, cx);
+            } else if self.find.is_none() && self.plus_menu_position.is_none() {
+                let result = self.encode_key(&stroke, action).map(|_| ());
+                self.report(result, cx);
             }
         }
-        if m.control && stroke.key == "space" {
-            self.input(&[0])?;
-            return Ok(Some(()));
+    }
+    fn report_focus(&mut self, focused: bool) -> Result<()> {
+        if self.connecting {
+            return Ok(());
         }
-        if m.alt
-            && !m.platform
-            && let Some(text) = stroke.key_char.as_deref()
-        {
-            let bytes = format!("\x1b{text}");
-            self.input(bytes.as_bytes())?;
-            return Ok(Some(()));
+        let Some(writer) = self.writer.as_mut() else {
+            return Ok(());
+        };
+        for (&id, tab) in &mut self.tabs {
+            if let Some(bytes) = tab.focus(focused && id == self.active)? {
+                protocol::send(
+                    writer,
+                    &Request::Input {
+                        id,
+                        bytes: bytes.to_vec(),
+                    },
+                )?;
+            }
         }
-        Ok(None)
+        Ok(())
+    }
+    fn release_keys(&mut self) -> Result<()> {
+        for (id, mut stroke) in self.keyboard.clear() {
+            stroke.modifiers = Modifiers::default();
+            self.send_key_release(id, &stroke)?;
+        }
+        Ok(())
     }
     fn link_at(&self, position: gpui::Point<Pixels>) -> Result<Option<String>> {
         if !self.bounds.contains(&position)
@@ -1253,7 +1313,9 @@ impl Render for Gui {
                     .and_then(|tab| tab.background().ok())
                     .unwrap_or_else(|| rgb(0))
             })
-            .on_key_down(cx.listener(Self::key_down));
+            .on_key_down(cx.listener(Self::key_down))
+            .on_key_up(cx.listener(Self::key_up))
+            .on_modifiers_changed(cx.listener(Self::modifiers_changed));
         match self.header(cx) {
             Ok(header) => root = root.child(header),
             Err(e) => {
@@ -1608,38 +1670,6 @@ fn adjacent_tab(tabs: &[TabInfo], active: u64, direction: isize) -> Option<u64> 
     let index = tabs.iter().position(|t| t.id == active)?;
     Some(tabs[(index as isize + direction).rem_euclid(tabs.len() as isize) as usize].id)
 }
-fn terminal_key(k: &str) -> Option<key::Key> {
-    use key::Key as K;
-    Some(match k {
-        "enter" => K::Enter,
-        "backspace" => K::Backspace,
-        "tab" => K::Tab,
-        "escape" => K::Escape,
-        "up" => K::ArrowUp,
-        "down" => K::ArrowDown,
-        "left" => K::ArrowLeft,
-        "right" => K::ArrowRight,
-        "home" => K::Home,
-        "end" => K::End,
-        "pageup" => K::PageUp,
-        "pagedown" => K::PageDown,
-        "insert" => K::Insert,
-        "delete" => K::Delete,
-        "f1" => K::F1,
-        "f2" => K::F2,
-        "f3" => K::F3,
-        "f4" => K::F4,
-        "f5" => K::F5,
-        "f6" => K::F6,
-        "f7" => K::F7,
-        "f8" => K::F8,
-        "f9" => K::F9,
-        "f10" => K::F10,
-        "f11" => K::F11,
-        "f12" => K::F12,
-        _ => return None,
-    })
-}
 fn open_window(
     config: Config,
     session: String,
@@ -1672,9 +1702,15 @@ fn open_window(
             })
             .detach();
             cx.observe_window_activation(window, |view, window, cx| {
-                if window.is_window_active() {
+                let focused = window.is_window_active();
+                let result = if focused {
                     view.update_native_progress(window, true, cx);
+                    Ok(())
+                } else {
+                    view.release_keys()
                 }
+                .and_then(|()| view.report_focus(focused));
+                view.report(result, cx);
             })
             .detach();
         });

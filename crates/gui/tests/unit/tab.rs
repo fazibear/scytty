@@ -1,5 +1,5 @@
 use super::*;
-use crate::{selection_point, terminal_key};
+use crate::{keyboard::terminal_key, selection_point};
 use ghostty_vt::TerminalOptions;
 use ghostty_vt::selection::Selection;
 use ghostty_vt::terminal::{Point as TerminalPoint, PointCoordinate};
@@ -461,6 +461,24 @@ fn selection_and_snapshot() -> Result<()> {
     assert!(tab.cells.iter().any(|c| c.text == "é"));
     Ok(())
 }
+#[test]
+fn focus_reporting_is_negotiated_deduplicated_and_resets() -> Result<()> {
+    let mut tab = Tab::new(Terminal::new(TerminalOptions::default())?)?;
+    assert!(tab.focus(true)?.is_none());
+    tab.terminal.vt_write(b"\x1b[?1004h");
+    assert_eq!(tab.focus(true)?, Some(b"\x1b[I".as_slice()));
+    assert!(tab.focus(true)?.is_none());
+    assert_eq!(tab.focus(false)?, Some(b"\x1b[O".as_slice()));
+    assert!(tab.focus(false)?.is_none());
+    tab.terminal.vt_write(b"\x1b[?1004l");
+    assert!(tab.focus(false)?.is_none());
+    tab.terminal.vt_write(b"\x1b[?1004h");
+    assert_eq!(tab.focus(false)?, Some(b"\x1b[O".as_slice()));
+    tab.exited = true;
+    assert!(tab.focus(true)?.is_none());
+    Ok(())
+}
+
 #[test]
 fn resize_preserves_scrollback_position() -> Result<()> {
     let mut terminal = Terminal::new(TerminalOptions::default())?;

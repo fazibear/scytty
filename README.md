@@ -471,8 +471,19 @@ scrollback; scrollbar dragging stays local.
 Terminal styling supports bold, italic, dim, blinking text, inverse, conceal,
 colored single/double/curly/dotted/dashed underlines, overline and strikethrough.
 Bold and italic use the configured font's available faces; text and decorations
-blink together without blinking backgrounds. Extended keyboard/IME support
-remains incomplete.
+blink together without blinking backgrounds.
+Keyboard input follows Ghostty's negotiated legacy/fixterms, xterm modifyOtherKeys
+and Kitty protocols, including repeat/release events, modifiers, alternate key
+codes and associated text. Native IME commits remain text; shortcuts and clipboard
+paste stay local. Held-key releases follow the original tab and are flushed on
+window focus loss. Negotiated focus reporting follows window activation and tab
+changes. Exposed keypad operators, media/browser keys and Kitty F1–F35 are encoded;
+Caps Lock toggles produce balanced key events because GPUI provides no physical
+Caps Lock release.
+GPUI exposes logical keys, not physical scan codes, modifier sides, Num Lock state
+or all keypad distinctions. Those details and layout-independent alternate codes
+cannot be reported faithfully yet; shifted punctuation may also change identity
+between press and release. Full physical-key support requires a GPUI change.
 Unicode text is passed through, but wide/combined glyph rendering needs more work.
 Terminal applications can write supported text to the clipboard; clipboard reads
 remain denied.

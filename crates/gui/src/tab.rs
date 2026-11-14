@@ -47,6 +47,7 @@ pub(super) struct Tab {
     pub(super) resize_pending: bool,
     pub(super) anchor: Option<TrackedGridRef>,
     pub(super) exited: bool,
+    reported_focus: Option<bool>,
 }
 impl Tab {
     pub(super) fn new(mut terminal: Terminal) -> Result<Self> {
@@ -73,8 +74,25 @@ impl Tab {
             resize_pending: false,
             anchor: None,
             exited: false,
+            reported_focus: None,
         })
     }
+    pub(super) fn focus(&mut self, focused: bool) -> Result<Option<&'static [u8]>> {
+        if self.exited
+            || !self
+                .terminal
+                .mode(ghostty_vt::terminal::Mode::FOCUS_EVENT)?
+        {
+            self.reported_focus = None;
+            return Ok(None);
+        }
+        if self.reported_focus == Some(focused) {
+            return Ok(None);
+        }
+        self.reported_focus = Some(focused);
+        Ok(Some(if focused { b"\x1b[I" } else { b"\x1b[O" }))
+    }
+
     pub(super) fn mouse(
         &mut self,
         event: &ghostty_vt::mouse::Event,
