@@ -37,6 +37,7 @@ pub(super) struct Tab {
     pub(super) default_colors: Option<(ghostty_vt::style::RgbColor, ghostty_vt::style::RgbColor)>,
     pub(super) hold_since: Option<Instant>,
     pub(super) encoder: key::Encoder,
+    mouse_encoder: ghostty_vt::mouse::Encoder,
     pub(super) size: (u16, u16, u32, u32),
     pub(super) resize_target: Option<((u16, u16, u32, u32), Instant)>,
     pub(super) resize_pending: bool,
@@ -62,6 +63,7 @@ impl Tab {
             default_colors: None,
             hold_since: None,
             encoder: key::Encoder::new()?,
+            mouse_encoder: ghostty_vt::mouse::Encoder::new()?,
             size: (0, 0, 0, 0),
             resize_target: None,
             resize_pending: false,
@@ -69,6 +71,32 @@ impl Tab {
             exited: false,
         })
     }
+    pub(super) fn mouse(
+        &mut self,
+        event: &ghostty_vt::mouse::Event,
+        cell: Size<Pixels>,
+        pressed: bool,
+    ) -> Result<Vec<u8>> {
+        let width = (f32::from(cell.width) as u32).max(1);
+        let height = (f32::from(cell.height) as u32).max(1);
+        self.mouse_encoder
+            .set_options_from_terminal(&self.terminal)
+            .set_any_button_pressed(pressed)
+            .set_size(ghostty_vt::mouse::EncoderSize {
+                screen_width: u32::from(self.terminal.cols()?) * width,
+                screen_height: u32::from(self.terminal.rows()?) * height,
+                cell_width: width,
+                cell_height: height,
+                padding_top: 0,
+                padding_bottom: 0,
+                padding_left: 0,
+                padding_right: 0,
+            });
+        let mut bytes = Vec::new();
+        self.mouse_encoder.encode_to_vec(event, &mut bytes)?;
+        Ok(bytes)
+    }
+
     pub(super) fn scroll(
         &mut self,
         rows: isize,
@@ -82,19 +110,6 @@ impl Tab {
             return Ok(bytes);
         }
         if !mods.contains(key::Mods::SHIFT) && self.terminal.is_mouse_tracking()? {
-            let mut encoder = mouse::Encoder::new()?;
-            encoder
-                .set_options_from_terminal(&self.terminal)
-                .set_size(mouse::EncoderSize {
-                    screen_width: u32::from(self.size.0) * (f32::from(cell.width) as u32).max(1),
-                    screen_height: u32::from(self.size.1) * (f32::from(cell.height) as u32).max(1),
-                    cell_width: (f32::from(cell.width) as u32).max(1),
-                    cell_height: (f32::from(cell.height) as u32).max(1),
-                    padding_top: 0,
-                    padding_bottom: 0,
-                    padding_left: 0,
-                    padding_right: 0,
-                });
             let mut event = mouse::Event::new()?;
             event
                 .set_action(mouse::Action::Press)
@@ -106,7 +121,7 @@ impl Tab {
                 .set_position(position)
                 .set_mods(mods);
             for _ in 0..rows.unsigned_abs() {
-                encoder.encode_to_vec(&event, &mut bytes)?;
+                bytes.extend(self.mouse(&event, cell, false)?);
             }
         } else if !mods.contains(key::Mods::SHIFT)
             && self.terminal.active_screen()? == Screen::Alternate

@@ -5,6 +5,59 @@ use ghostty_vt::selection::Selection;
 use ghostty_vt::terminal::{Point as TerminalPoint, PointCoordinate};
 use gpui::{point, px, size};
 #[test]
+fn mouse_buttons_motion_and_protocols() -> Result<()> {
+    use ghostty_vt::mouse::{Action, Button, Event, Position};
+    let mut tab = Tab::new(Terminal::new(TerminalOptions::default())?)?;
+    let cell = size(px(10.), px(20.));
+    let mut event = Event::new()?;
+    event
+        .set_action(Action::Press)
+        .set_button(Some(Button::Left))
+        .set_position(Position { x: 15., y: 25. });
+    assert!(tab.mouse(&event, cell, true)?.is_empty());
+    tab.terminal.vt_write(b"\x1b[?1000h\x1b[?1006h");
+    assert_eq!(tab.mouse(&event, cell, true)?, b"\x1b[<0;2;2M");
+    event.set_action(Action::Release);
+    assert_eq!(tab.mouse(&event, cell, false)?, b"\x1b[<0;2;2m");
+    event.set_action(Action::Motion);
+    assert!(tab.mouse(&event, cell, true)?.is_empty());
+    tab.terminal.vt_write(b"\x1b[?1002h");
+    event.set_position(Position { x: 25., y: 25. });
+    assert_eq!(tab.mouse(&event, cell, true)?, b"\x1b[<32;3;2M");
+    event
+        .set_position(Position { x: 35., y: 25. })
+        .set_button(None);
+    assert!(tab.mouse(&event, cell, false)?.is_empty());
+    tab.terminal.vt_write(b"\x1b[?1003h");
+    assert_eq!(tab.mouse(&event, cell, false)?, b"\x1b[<35;4;2M");
+    event
+        .set_action(Action::Press)
+        .set_button(Some(Button::Right))
+        .set_mods(key::Mods::CTRL | key::Mods::ALT);
+    assert_eq!(tab.mouse(&event, cell, true)?, b"\x1b[<26;4;2M");
+    event
+        .set_button(Some(Button::Middle))
+        .set_mods(key::Mods::empty());
+    assert_eq!(tab.mouse(&event, cell, true)?, b"\x1b[<1;4;2M");
+    event.set_button(Some(Button::Six));
+    assert_eq!(tab.mouse(&event, cell, false)?, b"\x1b[<66;4;2M");
+    event.set_button(Some(Button::Seven));
+    assert_eq!(tab.mouse(&event, cell, false)?, b"\x1b[<67;4;2M");
+    tab.terminal.vt_write(b"\x1b[?1006l");
+    event
+        .set_button(Some(Button::Left))
+        .set_position(Position { x: 15., y: 25. });
+    assert_eq!(tab.mouse(&event, cell, true)?, b"\x1b[M\x20\x22\x22");
+    tab.terminal.vt_write(b"\x1b[?1005h");
+    assert_eq!(tab.mouse(&event, cell, true)?, b"\x1b[M\x20\x22\x22");
+    tab.terminal.vt_write(b"\x1b[?1005l\x1b[?1015h");
+    assert_eq!(tab.mouse(&event, cell, true)?, b"\x1b[32;2;2M");
+    tab.terminal.vt_write(b"\x1b[?1015l\x1b[?1016h");
+    assert_eq!(tab.mouse(&event, cell, true)?, b"\x1b[<0;15;25M");
+    Ok(())
+}
+
+#[test]
 fn wheel_reports_to_apps_and_shift_keeps_local_scrolling() -> Result<()> {
     let mut tab = Tab::new(Terminal::new(TerminalOptions::default())?)?;
     tab.size = (80, 24, 10, 20);

@@ -83,6 +83,8 @@ struct Gui {
     marked: String,
     marked_selection: Range<usize>,
     scroll_remainder: f32,
+    horizontal_scroll_remainder: f32,
+    reported_mouse_buttons: Vec<(u64, MouseButton)>,
     scroll_drag: Option<(u64, Pixels)>,
     link_press: Option<(gpui::Point<Pixels>, String)>,
     link_hovered: Option<gpui::Point<Pixels>>,
@@ -131,6 +133,8 @@ impl Gui {
             marked: String::new(),
             marked_selection: 0..0,
             scroll_remainder: 0.,
+            horizontal_scroll_remainder: 0.,
+            reported_mouse_buttons: Vec::new(),
             scroll_drag: None,
             link_press: None,
             link_hovered: None,
@@ -297,6 +301,7 @@ impl Gui {
         self.input(&encoded[..n])
     }
     fn disconnect(&mut self) {
+        self.reported_mouse_buttons.clear();
         self.updates = None;
         self.writer = None;
         self.connection = None;
@@ -689,7 +694,85 @@ impl Gui {
             tab.anchor = None;
         }
     }
+    fn report_mouse(
+        &mut self,
+        id: u64,
+        action: ghostty_vt::mouse::Action,
+        button: Option<MouseButton>,
+        position: gpui::Point<Pixels>,
+        modifiers: Modifiers,
+    ) -> Result<()> {
+        use ghostty_vt::mouse;
+        if self.connecting || self.writer.is_none() {
+            return Ok(());
+        }
+        let pressed = self
+            .reported_mouse_buttons
+            .iter()
+            .any(|(tab, _)| *tab == id);
+        let Some(tab) = self.tabs.get_mut(&id) else {
+            return Ok(());
+        };
+        let width = (f32::from(self.cell.width) as u32).max(1);
+        let height = (f32::from(self.cell.height) as u32).max(1);
+        let mut event = mouse::Event::new()?;
+        let mut mods = key::Mods::empty();
+        if modifiers.shift {
+            mods |= key::Mods::SHIFT;
+        }
+        if modifiers.control {
+            mods |= key::Mods::CTRL;
+        }
+        if modifiers.alt {
+            mods |= key::Mods::ALT;
+        }
+        event
+            .set_action(action)
+            .set_mods(mods)
+            .set_button(button.map(|button| match button {
+                MouseButton::Left => mouse::Button::Left,
+                MouseButton::Right => mouse::Button::Right,
+                MouseButton::Middle => mouse::Button::Middle,
+                MouseButton::Navigate(NavigationDirection::Back) => mouse::Button::Eight,
+                MouseButton::Navigate(NavigationDirection::Forward) => mouse::Button::Nine,
+            }))
+            .set_position(mouse::Position {
+                x: f32::from(position.x - self.bounds.left()).clamp(
+                    0.,
+                    (u32::from(tab.terminal.cols()?) * width).saturating_sub(1) as f32,
+                ),
+                y: f32::from(position.y - self.bounds.top()).clamp(
+                    0.,
+                    (u32::from(tab.terminal.rows()?) * height).saturating_sub(1) as f32,
+                ),
+            });
+        let bytes = tab.mouse(&event, self.cell, pressed)?;
+        if !bytes.is_empty() {
+            self.request(Request::Input { id, bytes })?;
+        }
+        Ok(())
+    }
+
     fn mouse_up(&mut self, event: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(index) = self
+            .reported_mouse_buttons
+            .iter()
+            .position(|(_, button)| *button == event.button)
+        {
+            let (id, _) = self.reported_mouse_buttons.remove(index);
+            let result = self.report_mouse(
+                id,
+                ghostty_vt::mouse::Action::Release,
+                Some(event.button),
+                event.position,
+                event.modifiers,
+            );
+            self.report(result, cx);
+            return;
+        }
+        if event.button != MouseButton::Left {
+            return;
+        }
         self.end_mouse_drag();
         if let Some((start, url)) = self.link_press.take()
             && (event.position.x - start.x).abs() <= px(4.)
@@ -701,6 +784,49 @@ impl Gui {
     }
     fn mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.focus.focus(window);
+        let report = self
+            .tabs
+            .get(&self.active)
+            .map(|tab| tab.terminal.is_mouse_tracking())
+            .transpose();
+        let tracking = match report {
+            Ok(value) => value.unwrap_or(false),
+            Err(error) => {
+                self.report(Err(error.into()), cx);
+                return;
+            }
+        };
+        let scrollbar = self
+            .tabs
+            .get(&self.active)
+            .and_then(|tab| tab.terminal.scrollbar().ok())
+            .is_some_and(|scroll| {
+                scrollbar::ScrollBar::new(self.bounds, scroll)
+                    .track
+                    .contains(&event.position)
+            });
+        if tracking && !event.modifiers.shift && !scrollbar {
+            if !self
+                .reported_mouse_buttons
+                .contains(&(self.active, event.button))
+            {
+                self.reported_mouse_buttons
+                    .push((self.active, event.button));
+            }
+            self.link_press = None;
+            let result = self.report_mouse(
+                self.active,
+                ghostty_vt::mouse::Action::Press,
+                Some(event.button),
+                event.position,
+                event.modifiers,
+            );
+            self.report(result, cx);
+            return;
+        }
+        if event.button != MouseButton::Left {
+            return;
+        }
         self.link_press = self
             .link_at(event.position)
             .ok()
@@ -745,6 +871,43 @@ impl Gui {
         self.report(result, cx);
     }
     fn mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.scroll_drag.is_none()
+            && (self.bounds.contains(&event.position)
+                || self
+                    .reported_mouse_buttons
+                    .iter()
+                    .any(|(id, _)| *id == self.active))
+            && !event.modifiers.shift
+        {
+            let tracking = self
+                .tabs
+                .get(&self.active)
+                .map(|tab| tab.terminal.is_mouse_tracking())
+                .transpose();
+            match tracking {
+                Ok(Some(true)) => {
+                    self.link_hovered = None;
+                    let button = event.pressed_button.filter(|button| {
+                        self.reported_mouse_buttons
+                            .contains(&(self.active, *button))
+                    });
+                    let result = self.report_mouse(
+                        self.active,
+                        ghostty_vt::mouse::Action::Motion,
+                        button,
+                        event.position,
+                        event.modifiers,
+                    );
+                    self.report(result, cx);
+                    return;
+                }
+                Err(error) => {
+                    self.report(Err(error.into()), cx);
+                    return;
+                }
+                _ => {}
+            }
+        }
         let link_hovered = self
             .link_at(event.position)
             .ok()
@@ -819,7 +982,7 @@ impl Gui {
                 if event.modifiers.alt {
                     mods |= key::Mods::ALT;
                 }
-                let bytes = tab.scroll(
+                let mut bytes = tab.scroll(
                     rows,
                     ghostty_vt::mouse::Position {
                         x: f32::from(event.position.x - self.bounds.left()).max(0.),
@@ -828,6 +991,29 @@ impl Gui {
                     self.cell,
                     mods,
                 )?;
+                let columns = scroll_rows(
+                    &mut self.horizontal_scroll_remainder,
+                    f32::from(delta.x) / f32::from(self.cell.width),
+                );
+                if !event.modifiers.shift && tab.terminal.is_mouse_tracking()? && columns != 0 {
+                    use ghostty_vt::mouse;
+                    let mut wheel = mouse::Event::new()?;
+                    wheel
+                        .set_action(mouse::Action::Press)
+                        .set_button(Some(if columns < 0 {
+                            mouse::Button::Six
+                        } else {
+                            mouse::Button::Seven
+                        }))
+                        .set_mods(mods)
+                        .set_position(mouse::Position {
+                            x: f32::from(event.position.x - self.bounds.left()).max(0.),
+                            y: f32::from(event.position.y - self.bounds.top()).max(0.),
+                        });
+                    for _ in 0..columns.unsigned_abs() {
+                        bytes.extend(tab.mouse(&wheel, self.cell, false)?);
+                    }
+                }
                 if !bytes.is_empty() {
                     self.input(&bytes)?;
                 }
@@ -1128,14 +1314,28 @@ impl Render for Gui {
                             .and_then(|tab| tab.mouse_shape.as_deref()),
                     )
                 })
-                .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
+                .on_any_mouse_down(cx.listener(Self::mouse_down))
                 .on_mouse_up(MouseButton::Left, cx.listener(Self::mouse_up))
+                .on_mouse_up(MouseButton::Right, cx.listener(Self::mouse_up))
+                .on_mouse_up(MouseButton::Middle, cx.listener(Self::mouse_up))
+                .on_mouse_up(
+                    MouseButton::Navigate(NavigationDirection::Back),
+                    cx.listener(Self::mouse_up),
+                )
+                .on_mouse_up(
+                    MouseButton::Navigate(NavigationDirection::Forward),
+                    cx.listener(Self::mouse_up),
+                )
+                .on_mouse_up_out(MouseButton::Left, cx.listener(Self::mouse_up))
+                .on_mouse_up_out(MouseButton::Right, cx.listener(Self::mouse_up))
+                .on_mouse_up_out(MouseButton::Middle, cx.listener(Self::mouse_up))
                 .on_mouse_up_out(
-                    MouseButton::Left,
-                    cx.listener(|this, _, _, _| {
-                        this.end_mouse_drag();
-                        this.link_press = None;
-                    }),
+                    MouseButton::Navigate(NavigationDirection::Back),
+                    cx.listener(Self::mouse_up),
+                )
+                .on_mouse_up_out(
+                    MouseButton::Navigate(NavigationDirection::Forward),
+                    cx.listener(Self::mouse_up),
                 )
                 .on_mouse_move(cx.listener(Self::mouse_move))
                 .on_hover(cx.listener(|this, hovered: &bool, _, cx| {

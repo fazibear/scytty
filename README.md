@@ -464,11 +464,14 @@ new shells (restarting ends existing sessions).
 
 ## Limits
 
-One attached window per session; no splits yet. No mouse reporting,
-full font styling, or complete extended keyboard/IME support.
-Unicode text is passed through, but wide/combined glyph rendering needs
-more work. Clipboard access requested by terminal programs is denied.
-There is no session-list UI yet.
+One attached window per session; no splits or session-list UI yet.
+Mouse reporting supports clicks, releases, dragging, motion and both wheel axes
+using the application's requested protocol. Hold Shift for local selection and
+scrollback; scrollbar dragging stays local.
+Full font styling and complete extended keyboard/IME support remain unfinished.
+Unicode text is passed through, but wide/combined glyph rendering needs more work.
+Terminal applications can write supported text to the clipboard; clipboard reads
+remain denied.
 
 ```sh
 cargo test --workspace
