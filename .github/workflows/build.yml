@@ -96,7 +96,7 @@ jobs:
         if: runner.os == 'Windows'
         with:
           repository: ghostty-org/ghostty
-          ref: 83fb95624b0439ee660c2679b43b38c8b63769cd
+          ref: vt-1.0.1
           path: .ghostty-source
           persist-credentials: false
       - name: Use pinned Ghostty checkout

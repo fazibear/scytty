@@ -6,7 +6,7 @@
 
 
 A minimal native terminal in Rust: GPUI draws the window,
-libghostty-vt (via `ghostty-vt`) interprets terminal output, and
+libghostty-vt 1.0.1 (via `ghostty-vt` 0.9) interprets terminal output, and
 `portable-pty` runs your login shell. This uses Ghostty's VT library,
 not the full Ghostty application embedding API.
 

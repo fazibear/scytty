@@ -155,10 +155,13 @@ impl Gui {
             .max_h(height)
             .overflow_y_scroll()
             .p(px(4.))
-            .bg(rgb(0x252525))
+            .bg(rgb(0x30213f))
             .border_1()
-            .border_color(rgb(0x555555))
-            .rounded(px(6.))
+            .border_color(rgb(0x785494))
+            .rounded(px(8.))
+            .text_size(px(14.))
+            .text_color(rgb(0xf4edf9))
+            .font_weight(FontWeight::MEDIUM)
             .occlude()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
@@ -174,16 +177,23 @@ impl Gui {
                 div()
                     .id(("plus-menu-item", index))
                     .h(row_height)
-                    .px(px(8.))
+                    .px(px(16.))
                     .line_height(row_height)
                     .overflow_hidden()
                     .cursor_pointer()
-                    .rounded(px(3.))
-                    .bg(if index == self.plus_menu_selected {
-                        rgb(0x3b4d70)
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(if index == self.plus_menu_selected {
+                        rgb(0xac78d4)
                     } else {
-                        rgb(0x252525)
+                        rgb(0x30213f)
                     })
+                    .bg(if index == self.plus_menu_selected {
+                        rgb(0x463057)
+                    } else {
+                        rgb(0x30213f)
+                    })
+                    .active(|style| style.bg(rgb(0x251830)).border_color(rgb(0xc79aeb)))
                     .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                         if *hovered {
                             this.plus_menu_selected = index;

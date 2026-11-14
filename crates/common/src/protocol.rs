@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 
 // Bump whenever messages or the Ghostty snapshot format become incompatible.
-pub const PROTOCOL_VERSION: u32 = 5;
+pub const PROTOCOL_VERSION: u32 = 6;
 const MAGIC: &[u8; 8] = b"SCYTTY\r\n";
 
 /// Fixed preamble: both peers write before reading, independent of frame encoding.
