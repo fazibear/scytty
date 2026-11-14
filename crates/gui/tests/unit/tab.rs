@@ -5,6 +5,31 @@ use ghostty_vt::selection::Selection;
 use ghostty_vt::terminal::{Point as TerminalPoint, PointCoordinate};
 use gpui::{point, px, size};
 #[test]
+fn full_styles_and_resets_survive_snapshots() -> Result<()> {
+    let mut tab = Tab::new(Terminal::new(TerminalOptions::default())?)?;
+    tab.terminal
+        .vt_write(b"\x1b[1;2;3;5;53mA \x1b[22;23;25;55mB\x1b[1;3;5;53;8mC\x1b[0mD");
+    tab.snapshot()?;
+    let first = &tab.cells[0];
+    assert!(first.bold && first.italic && first.blink && first.overline);
+    let blank = &tab.cells[1];
+    assert!(blank.blink && blank.overline);
+    let plain = &tab.cells[2];
+    assert!(!plain.bold && !plain.italic && !plain.blink && !plain.overline);
+    assert!(first.fg.r < plain.fg.r);
+    let hidden = &tab.cells[3];
+    assert!(hidden.text.is_empty() && !hidden.blink && !hidden.overline);
+    let reset = &tab.cells[4];
+    assert!(!reset.bold && !reset.italic && !reset.blink && !reset.overline);
+    let mut bytes = Vec::new();
+    ghostty_vt::snapshot::encode_to(&tab.terminal, &mut bytes)?;
+    let mut restored = Tab::new(ghostty_vt::snapshot::Decoder::from_slice(&bytes).decode()?)?;
+    restored.snapshot()?;
+    assert!(restored.cells == tab.cells);
+    Ok(())
+}
+
+#[test]
 fn mouse_buttons_motion_and_protocols() -> Result<()> {
     use ghostty_vt::mouse::{Action, Button, Event, Position};
     let mut tab = Tab::new(Terminal::new(TerminalOptions::default())?)?;

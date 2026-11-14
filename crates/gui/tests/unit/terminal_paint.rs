@@ -8,11 +8,44 @@ fn cell(x: usize, text: &str) -> Cell {
         fg: rgb(0xffffff),
         bg: None,
         narrow: true,
+        bold: false,
+        italic: false,
+        blink: false,
+        overline: false,
         underline: Underline::None,
         underline_color: rgb(0xffffff),
         strikethrough: false,
     }
 }
+#[test]
+fn font_styles_and_blink_boundaries() {
+    let font = gpui::font("monospace");
+    for (bold, italic) in [(false, false), (true, false), (false, true), (true, true)] {
+        let mut c = cell(0, "a");
+        c.bold = bold;
+        c.italic = italic;
+        let styled = styled_font(&font, &c);
+        assert_eq!(styled.weight == gpui::FontWeight::BOLD, bold);
+        assert_eq!(styled.style == gpui::FontStyle::Italic, italic);
+    }
+    for millis in [0, 499, 1000, 1499] {
+        assert!(blink_visible(Duration::from_millis(millis)));
+    }
+    for millis in [500, 999, 1500, 1999] {
+        assert!(!blink_visible(Duration::from_millis(millis)));
+    }
+    for style in 0..3 {
+        let mut cells = vec![cell(0, "a"), cell(1, "b"), cell(2, "c")];
+        match style {
+            0 => cells[1].bold = true,
+            1 => cells[1].italic = true,
+            _ => cells[1].blink = true,
+        }
+        assert_eq!(run_end(&cells, 0), 1);
+        assert_eq!(run_end(&cells, 1), 2);
+    }
+}
+
 #[test]
 fn underline_patterns_cover_and_stay_within_the_cell() {
     assert!(underline_segments(Underline::None, px(7.), px(1.)).is_empty());

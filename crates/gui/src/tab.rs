@@ -18,6 +18,10 @@ pub(super) struct Cell {
     pub(super) fg: Rgba,
     pub(super) bg: Option<Rgba>,
     pub(super) narrow: bool,
+    pub(super) bold: bool,
+    pub(super) italic: bool,
+    pub(super) blink: bool,
+    pub(super) overline: bool,
     pub(super) underline: ghostty_vt::style::Underline,
     pub(super) underline_color: Rgba,
     pub(super) strikethrough: bool,
@@ -264,6 +268,10 @@ impl Tab {
                     fg,
                     bg: (background.is_some() || style.inverse || selected).then_some(bg),
                     narrow: cell.raw_cell()?.wide()? == ghostty_vt::screen::CellWide::Narrow,
+                    bold: style.bold,
+                    italic: style.italic,
+                    blink: style.blink && !style.invisible,
+                    overline: style.overline && !style.invisible,
                     underline: if style.invisible {
                         ghostty_vt::style::Underline::None
                     } else {

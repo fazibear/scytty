@@ -468,7 +468,11 @@ One attached window per session; no splits or session-list UI yet.
 Mouse reporting supports clicks, releases, dragging, motion and both wheel axes
 using the application's requested protocol. Hold Shift for local selection and
 scrollback; scrollbar dragging stays local.
-Full font styling and complete extended keyboard/IME support remain unfinished.
+Terminal styling supports bold, italic, dim, blinking text, inverse, conceal,
+colored single/double/curly/dotted/dashed underlines, overline and strikethrough.
+Bold and italic use the configured font's available faces; text and decorations
+blink together without blinking backgrounds. Extended keyboard/IME support
+remains incomplete.
 Unicode text is passed through, but wide/combined glyph rendering needs more work.
 Terminal applications can write supported text to the clipboard; clipboard reads
 remain denied.

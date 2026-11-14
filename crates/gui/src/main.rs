@@ -164,7 +164,9 @@ impl Gui {
                         }
                         if status_tick
                             || view.tabs.get(&view.active).is_some_and(|tab| {
-                                tab.cursor.is_some() && tab.cursor_state.is_some_and(|c| c.blinking)
+                                (tab.cursor.is_some()
+                                    && tab.cursor_state.is_some_and(|c| c.blinking))
+                                    || tab.cells.iter().any(|cell| cell.blink)
                             })
                         {
                             cx.notify();

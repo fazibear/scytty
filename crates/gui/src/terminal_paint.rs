@@ -4,11 +4,13 @@ use gpui::{
     App, Bounds, ContentMask, Font, Pixels, Point, Rgba, ShapedLine, Size, TextRun, Window, fill,
     point, px, size,
 };
+use std::time::{Duration, Instant};
 
 #[derive(Default)]
 pub struct Cache {
     key: Option<(Font, Pixels, Size<Pixels>, f32)>,
     rows: Vec<Row>,
+    blink_epoch: Option<Instant>,
 }
 
 #[derive(Default)]
@@ -21,6 +23,22 @@ struct Text {
     x: usize,
     line: ShapedLine,
     expanded: bool,
+    blink: bool,
+}
+
+fn blink_visible(elapsed: Duration) -> bool {
+    elapsed.as_millis() % 1000 < 500
+}
+
+fn styled_font(font: &Font, cell: &Cell) -> Font {
+    let mut font = font.clone();
+    if cell.bold {
+        font = font.bold();
+    }
+    if cell.italic {
+        font = font.italic();
+    }
+    font
 }
 
 fn ascii(cell: &Cell) -> bool {
@@ -37,6 +55,9 @@ fn run_end(cells: &[Cell], start: usize) -> usize {
     while let Some(next) = cells.get(end) {
         if !ascii(next)
             || next.fg != first.fg
+            || next.bold != first.bold
+            || next.italic != first.italic
+            || next.blink != first.blink
             || next.y != first.y
             || next.x != cells[end - 1].x + 1
         {
@@ -96,6 +117,7 @@ impl Cache {
         icon_scale: f32,
         window: &mut Window,
     ) {
+        self.blink_epoch.get_or_insert_with(Instant::now);
         let key = (font.clone(), font_size, cell, icon_scale);
         if self.key.as_ref() != Some(&key) {
             self.rows.clear();
@@ -132,7 +154,7 @@ impl Cache {
                 let text: String = source[i..end].iter().map(|c| c.text.as_str()).collect();
                 let run = TextRun {
                     len: text.len(),
-                    font: font.clone(),
+                    font: styled_font(font, c),
                     color: c.fg.into(),
                     background_color: None,
                     underline: None,
@@ -153,7 +175,7 @@ impl Cache {
                     for c in &source[i..end] {
                         let run = TextRun {
                             len: c.text.len(),
-                            font: font.clone(),
+                            font: styled_font(font, c),
                             color: c.fg.into(),
                             background_color: None,
                             underline: None,
@@ -169,6 +191,7 @@ impl Cache {
                             x: c.x,
                             line,
                             expanded: false,
+                            blink: c.blink,
                         });
                     }
                     i = end;
@@ -178,6 +201,7 @@ impl Cache {
                     x: c.x,
                     line,
                     expanded,
+                    blink: c.blink,
                 });
                 i = end;
             }
@@ -207,8 +231,14 @@ impl Cache {
         window: &mut Window,
         cx: &mut App,
     ) -> anyhow::Result<()> {
+        let show_blink = self
+            .blink_epoch
+            .is_none_or(|epoch| blink_visible(epoch.elapsed()));
         for (y, row) in self.rows.iter().enumerate() {
             for text in &row.text {
+                if text.blink && !show_blink {
+                    continue;
+                }
                 let origin = origin + point(cell.width * text.x as f32, cell.height * y as f32);
                 if text.expanded {
                     let bounds = Bounds::new(origin, size(cell.width * 2., cell.height));
@@ -230,6 +260,9 @@ impl Cache {
                 .max(1.)
                 / window.scale_factor());
             for c in &row.cells {
+                if c.blink && !show_blink {
+                    continue;
+                }
                 let origin = origin + point(cell.width * c.x as f32, cell.height * y as f32);
                 let underline_y = cell.height - thickness * 2.;
                 if c.underline == Underline::Curly {
@@ -249,6 +282,9 @@ impl Cache {
                             c.underline_color,
                         ));
                     }
+                }
+                if c.overline {
+                    window.paint_quad(fill(Bounds::new(origin, size(cell.width, thickness)), c.fg));
                 }
                 if c.strikethrough {
                     window.paint_quad(fill(
