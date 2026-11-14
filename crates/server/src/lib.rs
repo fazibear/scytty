@@ -164,6 +164,20 @@ fn tab_cwd(tab: &Tab) -> Option<std::path::PathBuf> {
     platform::tab_cwd(tab.master.as_ref(), tab.child.as_ref())
 }
 
+fn pty_size(cols: u16, rows: u16, width: u32, height: u32) -> PtySize {
+    PtySize {
+        cols,
+        rows,
+        // The PTY ioctl has 16-bit fields for the total pixel dimensions.
+        pixel_width: u32::from(cols)
+            .saturating_mul(width)
+            .min(u32::from(u16::MAX)) as u16,
+        pixel_height: u32::from(rows)
+            .saturating_mul(height)
+            .min(u32::from(u16::MAX)) as u16,
+    }
+}
+
 fn new_tab(
     session: &str,
     id: u64,
@@ -172,12 +186,7 @@ fn new_tab(
     cwd: Option<&std::path::Path>,
     bin: Option<&str>,
 ) -> Result<Tab> {
-    let pair = native_pty_system().openpty(PtySize {
-        cols: 80,
-        rows: 24,
-        pixel_width: 0,
-        pixel_height: 0,
-    })?;
+    let pair = native_pty_system().openpty(pty_size(80, 24, 0, 0))?;
     let mut command = match bin {
         Some(bin) => CommandBuilder::new(bin),
         None => platform::shell(),
@@ -539,12 +548,7 @@ pub fn run() -> Result<()> {
                                 bail!("invalid terminal dimensions");
                             }
                             if let Some(tab) = session.tabs.iter_mut().find(|t| t.id == id) {
-                                tab.master.resize(PtySize {
-                                    cols,
-                                    rows,
-                                    pixel_width: 0,
-                                    pixel_height: 0,
-                                })?;
+                                tab.master.resize(pty_size(cols, rows, width, height))?;
                                 tab.terminal.resize(cols, rows, width, height)?;
                                 session.emit(Update::Resized {
                                     id,

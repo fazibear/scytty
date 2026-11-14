@@ -1,4 +1,45 @@
 use super::*;
+
+#[test]
+fn pty_pixel_geometry_uses_total_dimensions_and_saturates() {
+    let size = pty_size(80, 24, 9, 18);
+    assert_eq!(
+        (size.cols, size.rows, size.pixel_width, size.pixel_height),
+        (80, 24, 720, 432)
+    );
+    let size = pty_size(500, 300, 256, 256);
+    assert_eq!((size.pixel_width, size.pixel_height), (u16::MAX, u16::MAX));
+}
+
+#[cfg(unix)]
+#[test]
+fn pty_ioctl_reports_gui_pixel_geometry_after_resize() -> Result<()> {
+    let pair = native_pty_system().openpty(pty_size(80, 24, 0, 0))?;
+    pair.master.resize(pty_size(153, 46, 9, 18))?;
+    let size = pair.master.get_size()?;
+    assert_eq!(
+        (size.cols, size.rows, size.pixel_width, size.pixel_height),
+        (153, 46, 1377, 828)
+    );
+    Ok(())
+}
+
+#[test]
+fn terminal_answers_pixel_size_queries_from_cell_geometry() -> Result<()> {
+    let mut terminal = Terminal::new(TerminalOptions::default())?;
+    terminal.resize(153, 46, 9, 18)?;
+    terminal.vt_write(b"\x1b[14t\x1b[16t\x1b[18t");
+    let reply: Vec<u8> = terminal
+        .events()
+        .filter_map(|event| match event {
+            VtEvent::PtyWrite(bytes) => Some(bytes),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert_eq!(reply, b"\x1b[4;828;1377t\x1b[6;18;9t\x1b[8;46;153t");
+    Ok(())
+}
 #[test]
 fn event_errors_only_reach_the_responsible_client() -> Result<()> {
     let mut sessions = HashMap::new();

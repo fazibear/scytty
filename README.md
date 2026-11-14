@@ -426,8 +426,11 @@ accommodate scrollback and image snapshots.
 
 Kitty graphics supports inline PNG and raw RGB/RGBA images, including chunked
 transfers, crops, scaling, z-order, scrolling, deletion and detach/reattach.
+Unicode placeholders (including inferred row/column markers) and relative
+placement chains are rendered from Ghostty's resolved image geometry.
 Use a Kitty-compatible sender with **direct/stream transfer**, also over SSH
-(for example `kitten icat --transfer-mode=stream picture.png`).
+(for example `kitten icat --transfer-mode=stream picture.png`, or add
+`--unicode-placeholder` for placeholder-based positioning).
 
 Minimal smoke test (a red block):
 
@@ -439,10 +442,9 @@ printf '\033_Ga=d,d=A\033\\' # delete
 Image storage is capped at 16 MiB per terminal screen. PNG decoding is bounded
 to 16 MiB RGBA and 4096 pixels per dimension; GPU texture limits may be lower.
 File, temporary-file and shared-memory transfer are disabled: programs must send
-image bytes through the PTY. Sixel, iTerm2 images, animation playback and Kitty
-Unicode-placeholder/relative placements are not rendered yet.
-Rebuild both GUI and server; restart the daemon when safe to enable images in
-new shells (restarting ends existing sessions).
+image bytes through the PTY. Sixel, iTerm2 images and animation playback are not
+rendered yet. Placeholder and relative-placement rendering requires a GUI rebuild;
+no daemon restart is needed.
 
 ## Included
 

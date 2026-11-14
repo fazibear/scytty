@@ -1,8 +1,5 @@
 use anyhow::Result;
-use ghostty_vt::{
-    Terminal,
-    kitty::graphics::{ImageFormat, PlacementIterator},
-};
+use ghostty_vt::{Terminal, kitty::graphics::ImageFormat, render::ImagePlacement};
 use gpui::{Bounds, ContentMask, Pixels, RenderImage, Window, point, px, size};
 use std::{
     collections::{HashMap, HashSet},
@@ -56,42 +53,39 @@ impl Images {
     pub fn prepare(
         &mut self,
         terminal: &Terminal,
+        placements: &[ImagePlacement],
         viewport: Bounds<Pixels>,
         cell: gpui::Size<Pixels>,
     ) -> Result<Vec<Placement>> {
         let graphics = terminal.kitty_graphics()?;
-        let mut iterator = PlacementIterator::new()?;
-        let mut placements = iterator.update(&graphics)?;
         let mut visible = HashSet::new();
         let mut result = Vec::new();
         let scale_x = f32::from(cell.width)
             / (terminal.width_px()? / u32::from(terminal.cols()?)).max(1) as f32;
         let scale_y = f32::from(cell.height)
             / (terminal.height_px()? / u32::from(terminal.rows()?)).max(1) as f32;
-        while let Some(placement) = placements.next() {
-            let image_id = placement.image_id()?;
+        for placement in placements {
+            let image_id = placement.image_id;
             let Some(image) = graphics.image(image_id) else {
                 continue;
             };
-            let Some(pos) = placement.viewport_pos(&image, terminal)? else {
-                continue;
-            };
-            let extent = placement.pixel_size(&image, terminal)?;
             let clip = Bounds::new(
                 viewport.origin
                     + point(
-                        cell.width * pos.col as f32 + px(placement.x_offset()? as f32 * scale_x),
-                        cell.height * pos.row as f32 + px(placement.y_offset()? as f32 * scale_y),
+                        cell.width * placement.viewport_col as f32
+                            + px(placement.cell_offset_x as f32 * scale_x),
+                        cell.height * placement.viewport_row as f32
+                            + px(placement.cell_offset_y as f32 * scale_y),
                     ),
                 size(
-                    px(extent.width as f32 * scale_x),
-                    px(extent.height as f32 * scale_y),
+                    px(placement.pixel_width as f32 * scale_x),
+                    px(placement.pixel_height as f32 * scale_y),
                 ),
             );
             if !clip.intersects(&viewport) {
                 continue;
             }
-            let generation = image.generation()?;
+            let generation = placement.image_generation;
             if let std::collections::hash_map::Entry::Vacant(entry) =
                 self.textures.entry(generation)
             {
@@ -111,22 +105,25 @@ impl Images {
                 entry.insert(Arc::new(RenderImage::new(vec![image::Frame::new(pixels)])));
             }
             visible.insert(generation);
-            let source = placement.source_rect(&image)?;
-            if source.width == 0 || source.height == 0 {
+            if placement.source_width == 0 || placement.source_height == 0 {
                 continue;
             }
-            let sx = clip.size.width / source.width as f32;
-            let sy = clip.size.height / source.height as f32;
+            let sx = clip.size.width / placement.source_width as f32;
+            let sy = clip.size.height / placement.source_height as f32;
             result.push(Placement {
                 image: self.textures[&generation].clone(),
                 bounds: Bounds::new(
-                    clip.origin - point(sx * source.x as f32, sy * source.y as f32),
+                    clip.origin
+                        - point(
+                            sx * placement.source_x as f32,
+                            sy * placement.source_y as f32,
+                        ),
                     size(sx * image.width()? as f32, sy * image.height()? as f32),
                 ),
                 clip,
-                z: placement.z()?,
+                z: placement.z,
                 image_id,
-                placement_id: placement.placement_id()?,
+                placement_id: placement.placement_id,
             });
         }
         self.textures

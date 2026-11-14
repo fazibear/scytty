@@ -31,6 +31,8 @@ pub(super) struct Tab {
     pub(super) render: RenderState,
     pub(super) images: images::Images,
     pub(super) placements: Vec<images::Placement>,
+    image_iterator: ghostty_vt::render::ImageIterator,
+    image_data: Vec<ghostty_vt::render::ImagePlacement>,
     pub(super) cells: Vec<Cell>,
     pub(super) bidi: crate::bidi::Layout,
     pub(super) paint_cache: terminal_paint::Cache,
@@ -59,6 +61,8 @@ impl Tab {
             render: RenderState::new()?,
             images: Default::default(),
             placements: Vec::new(),
+            image_iterator: ghostty_vt::render::ImageIterator::new()?,
+            image_data: Vec::new(),
             cells: vec![],
             bidi: Default::default(),
             paint_cache: Default::default(),
@@ -232,7 +236,9 @@ impl Tab {
         cell: Size<Pixels>,
     ) -> Result<()> {
         if self.snapshot()? {
-            self.placements = self.images.prepare(&self.terminal, bounds, cell)?;
+            self.placements =
+                self.images
+                    .prepare(&self.terminal, &self.image_data, bounds, cell)?;
         }
         Ok(())
     }
@@ -242,6 +248,11 @@ impl Tab {
             return Ok(false);
         }
         let snapshot = self.render.update(&self.terminal)?;
+        let mut images = self.image_iterator.update(&snapshot)?;
+        self.image_data.clear();
+        while let Some(image) = images.next() {
+            self.image_data.push(image?);
+        }
         let cursor = snapshot.cursor()?;
         if self.cursor_state != Some(cursor) {
             self.cursor_since = Instant::now();
@@ -311,7 +322,7 @@ impl Tab {
                     ghostty_vt::screen::CellWide::SpacerHead
                     | ghostty_vt::screen::CellWide::SpacerTail => 0,
                 };
-                if style.invisible || width == 0 {
+                if style.invisible || width == 0 || text.starts_with('\u{10eeee}') {
                     text.clear();
                 }
                 let cell = Cell {
