@@ -208,11 +208,7 @@ impl Gui {
             if let Some(warning) = restart {
                 warning.restart()?;
             }
-            if existing_path.is_some() {
-                transport::connect_session_choice(host, session, bin, existing_path)
-            } else {
-                transport::connect_session(host, session, bin)
-            }
+            transport::connect_session(host, session, bin, existing_path)
         });
         cx.spawn(async move |view, cx| {
             let result = task.await;
@@ -1578,8 +1574,8 @@ fn is_nerd_icon(ch: char) -> bool {
 }
 fn status_runs(segments: Vec<(String, Option<Rgba>)>) -> Vec<(String, Option<Rgba>, bool)> {
     let mut chars = segments
-        .into_iter()
-        .flat_map(|(text, color)| text.chars().map(|ch| (ch, color)).collect::<Vec<_>>())
+        .iter()
+        .flat_map(|(text, color)| text.chars().map(move |ch| (ch, *color)))
         .peekable();
     let mut runs: Vec<(String, Option<Rgba>, bool)> = Vec::new();
     while let Some((ch, color)) = chars.next() {

@@ -43,10 +43,14 @@ pub fn save(bounds: WindowBounds) -> Result<()> {
 fn parse(source: &str) -> Option<WindowBounds> {
     let mut words = source.split_whitespace();
     let mode = words.next()?;
-    let values: Vec<f32> = words.map(str::parse).collect::<Result<_, _>>().ok()?;
-    let [x, y, width, height] = *values.as_slice() else {
+    let mut values = [0.; 4];
+    for value in &mut values {
+        *value = words.next()?.parse::<f32>().ok()?;
+    }
+    if words.next().is_some() {
         return None;
-    };
+    }
+    let [x, y, width, height] = values;
     if !values.iter().all(|n| n.is_finite())
         || !(200.0..=16384.0).contains(&width)
         || !(100.0..=16384.0).contains(&height)

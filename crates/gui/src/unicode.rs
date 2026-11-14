@@ -25,7 +25,8 @@ pub(super) fn byte_range(text: &str, range: Range<usize>) -> Range<usize> {
 }
 
 pub(super) fn utf16_range(text: &str, range: Range<usize>) -> Range<usize> {
-    text[..range.start].encode_utf16().count()..text[..range.end].encode_utf16().count()
+    let start = text[..range.start].encode_utf16().count();
+    start..start + text[range].encode_utf16().count()
 }
 
 pub(super) fn replace_marked(

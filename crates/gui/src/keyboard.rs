@@ -154,12 +154,8 @@ pub(super) fn encode(
     }
     let mut event = key::Event::new()?;
     let mut mods = shared_mods(m);
-    if m.platform {
-        mods |= key::Mods::SUPER;
-    }
-    if caps_lock {
-        mods |= key::Mods::CAPS_LOCK;
-    }
+    mods.set(key::Mods::SUPER, m.platform);
+    mods.set(key::Mods::CAPS_LOCK, caps_lock);
     event
         .set_key(logical.unwrap_or(key::Key::Unidentified))
         .set_action(action)

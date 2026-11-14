@@ -84,7 +84,7 @@ pub fn safe_url(url: &str) -> bool {
     let Some((scheme, rest)) = url.split_once("://") else {
         return false;
     };
-    matches!(scheme.to_ascii_lowercase().as_str(), "http" | "https")
+    (scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https"))
         && !rest.split(['/', '?', '#']).next().unwrap_or("").is_empty()
         && !url.chars().any(|c| c.is_whitespace() || c.is_control())
         && !url.contains('\\')

@@ -14,10 +14,11 @@ mod transport {
 
     #[test]
     fn ssh_connection_failure_is_returned_from_worker() {
-        let result =
-            thread::spawn(|| connect_session(Some("-invalid-host".into()), "test".into(), None))
-                .join()
-                .expect("connection worker panicked");
+        let result = thread::spawn(|| {
+            connect_session(Some("-invalid-host".into()), "test".into(), None, None)
+        })
+        .join()
+        .expect("connection worker panicked");
         let error = result.err().expect("invalid SSH host must fail");
         assert!(error.to_string().contains("invalid SSH destination"));
     }

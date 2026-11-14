@@ -10,14 +10,11 @@ pub fn error_reaper() -> Arc<RenderImage> {
     static IMAGE: OnceLock<Arc<RenderImage>> = OnceLock::new();
     IMAGE
         .get_or_init(|| {
-            let mut pixels =
+            render_image(
                 image::load_from_memory(include_bytes!("../../../assets/error-reaper.png"))
                     .expect("bundled error reaper is a valid PNG")
-                    .into_rgba8();
-            for pixel in pixels.pixels_mut() {
-                pixel.0.swap(0, 2);
-            }
-            Arc::new(RenderImage::new(vec![image::Frame::new(pixels)]))
+                    .into_rgba8(),
+            )
         })
         .clone()
 }
@@ -97,12 +94,7 @@ impl Images {
                 ) else {
                     continue;
                 };
-                // GPUI's renderer expects BGRA image frames.
-                let mut pixels = pixels;
-                for pixel in pixels.pixels_mut() {
-                    pixel.0.swap(0, 2);
-                }
-                entry.insert(Arc::new(RenderImage::new(vec![image::Frame::new(pixels)])));
+                entry.insert(render_image(pixels));
             }
             visible.insert(generation);
             if placement.source_width == 0 || placement.source_height == 0 {
@@ -132,6 +124,14 @@ impl Images {
         Ok(result)
     }
 }
+fn render_image(mut pixels: image::RgbaImage) -> Arc<RenderImage> {
+    // GPUI's renderer expects BGRA image frames.
+    for pixel in pixels.pixels_mut() {
+        pixel.0.swap(0, 2);
+    }
+    Arc::new(RenderImage::new(vec![image::Frame::new(pixels)]))
+}
+
 fn rgba_pixels(
     width: u32,
     height: u32,

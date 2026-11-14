@@ -23,22 +23,12 @@ pub fn connect_session(
     host: Option<String>,
     session: String,
     bin: Option<String>,
-) -> Result<Connected> {
-    connect_session_choice(host, session, bin, None)
-}
-
-pub fn connect_session_choice(
-    host: Option<String>,
-    session: String,
-    bin: Option<String>,
     existing_path: Option<String>,
 ) -> Result<Connected> {
-    let connection = match host.as_deref() {
-        Some(host) if existing_path.is_some() => {
-            remote::connect_existing(host, existing_path.as_deref().unwrap())?
-        }
-        Some(host) => connect(host)?,
-        None => connect_local()?,
+    let connection = match (host.as_deref(), existing_path.as_deref()) {
+        (Some(host), Some(path)) => remote::connect_existing(host, path)?,
+        (Some(host), None) => remote::connect(host)?,
+        (None, _) => connect_local()?,
     };
     attach(connection, session, bin).map_err(|error| {
         match remote::restart_after_mismatch(host.as_deref()) {
@@ -104,10 +94,6 @@ fn connect_local() -> Result<Connection> {
     command.arg("--stdio");
     platform::hide_console(&mut command);
     bridge(command)
-}
-
-pub fn connect(host: &str) -> Result<Connection> {
-    crate::remote::connect(host)
 }
 
 pub(crate) fn bridge(mut command: Command) -> Result<Connection> {

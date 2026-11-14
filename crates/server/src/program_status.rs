@@ -12,11 +12,11 @@ pub struct Records {
     updated: VecDeque<String>,
 }
 impl Records {
-    pub fn state(&self) -> Option<String> {
+    pub fn state(&self) -> Option<&str> {
         self.updated
             .back()
             .and_then(|id| self.values.get(id))
-            .map(|record| record.state.clone())
+            .map(|record| record.state.as_str())
     }
     pub fn snapshot(&self) -> BTreeMap<String, ProgramStatus> {
         self.values
@@ -76,9 +76,9 @@ impl Records {
             return false;
         };
         let value = |key| {
-            body.split(':')
+            body.rsplit(':')
                 .filter_map(|pair| pair.split_once('='))
-                .filter(|(name, value)| {
+                .find(|(name, value)| {
                     name.trim_ascii() == key
                         && value
                             .trim_ascii()
@@ -86,20 +86,19 @@ impl Records {
                             .all(|b| b.is_ascii_alphanumeric() || b"_.+-,/=".contains(&b))
                 })
                 .map(|(_, value)| value.trim_ascii())
-                .next_back()
         };
         let Some(state) = value("state") else {
             return false;
         };
-        let id = value("id").unwrap_or("").to_owned();
+        let id = value("id").unwrap_or("");
         if state == "clear" {
             if id.is_empty() {
                 return self.clear();
             }
             let previous = self.values.len();
-            let prefix = id.clone() + "/";
+            let prefix = format!("{id}/");
             self.values
-                .retain(|key, _| key != &id && !key.starts_with(&prefix));
+                .retain(|key, _| key != id && !key.starts_with(&prefix));
             self.updated.retain(|key| self.values.contains_key(key));
             return previous != self.values.len();
         }
@@ -137,19 +136,19 @@ impl Records {
             title: text("title"),
             message: text("msg"),
         };
-        let previous_state = self.state();
-        let mut changed = self.values.get(&id) != Some(&record);
-        self.updated.retain(|key| key != &id);
+        let previous_state = self.state().map(str::to_owned);
+        let mut changed = self.values.get(id) != Some(&record);
+        self.updated.retain(|key| key != id);
         if self.values.len() == 256
-            && !self.values.contains_key(&id)
+            && !self.values.contains_key(id)
             && let Some(oldest) = self.updated.pop_front()
         {
             self.values.remove(&oldest);
             changed = true;
         }
-        self.values.insert(id.clone(), record);
-        self.updated.push_back(id);
-        changed || previous_state != self.state()
+        self.values.insert(id.to_owned(), record);
+        self.updated.push_back(id.to_owned());
+        changed || previous_state.as_deref() != self.state()
     }
 }
 

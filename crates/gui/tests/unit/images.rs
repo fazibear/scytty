@@ -3,6 +3,11 @@ use crate::tests::roundtrip;
 #[test]
 fn bundled_error_reaper_loads_and_is_cached() {
     assert!(Arc::ptr_eq(&error_reaper(), &error_reaper()));
+    let rgba = image::RgbaImage::from_raw(1, 1, vec![10, 20, 30, 40]).unwrap();
+    assert_eq!(
+        render_image(rgba).as_bytes(0),
+        Some([30, 20, 10, 40].as_slice())
+    );
 }
 
 #[test]

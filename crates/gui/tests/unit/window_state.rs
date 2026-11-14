@@ -7,6 +7,7 @@ fn valid_and_corrupt_geometry() {
     for source in [
         "",
         "window 0 0 960",
+        "window 0 0 960 640 extra",
         "window NaN 0 960 640",
         "window 0 0 -1 640",
         "oops 0 0 960 640",

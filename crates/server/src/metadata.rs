@@ -108,15 +108,11 @@ impl Metadata {
             ) {
                 return false;
             }
-            let next = if shape.is_empty() {
-                None
-            } else {
-                Some(shape.to_owned())
-            };
-            if self.mouse_shape == next {
+            let next = if shape.is_empty() { None } else { Some(shape) };
+            if self.mouse_shape.as_deref() == next {
                 return false;
             }
-            self.mouse_shape = next;
+            self.mouse_shape = next.map(str::to_owned);
             return true;
         }
         let Some(payload) = bytes.strip_prefix(b"1337;SetUserVar=") else {

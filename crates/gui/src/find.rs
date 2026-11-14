@@ -145,11 +145,10 @@ pub fn highlights(search: &Search, terminal: &Terminal) -> Result<Vec<Highlight>
         } else {
             1
         };
-        let selected = selected
-            .as_ref()
-            .map(|s| s.equals(terminal, &selection))
-            .transpose()?
-            .unwrap_or(false);
+        let selected = match &selected {
+            Some(selected) => selected.equals(terminal, &selection)?,
+            None => false,
+        };
         for y in u64::from(start.y).max(offset)..=u64::from(end.y).min(offset + rows - 1) {
             let x = if y == u64::from(start.y) {
                 usize::from(start.x)

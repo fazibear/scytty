@@ -22,19 +22,15 @@ fn message(event: Event) -> Option<Message> {
     let Event::DesktopNotification { title, body } = event else {
         return None;
     };
-    let title = text(&title, 128);
+    let mut title = text(&title, 128);
     let body = text(&body, 1024);
     if title.is_empty() && body.is_empty() {
         return None;
     }
-    Some(Message {
-        title: if title.is_empty() {
-            "Scytty".into()
-        } else {
-            title
-        },
-        body,
-    })
+    if title.is_empty() {
+        title.push_str("Scytty");
+    }
+    Some(Message { title, body })
 }
 
 pub fn handle(event: Event) {

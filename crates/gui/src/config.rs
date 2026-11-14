@@ -117,9 +117,8 @@ impl Config {
         ctx.set(
             "user_vars",
             self.lua.create_table_from(
-                tab.map(|t| &t.user_vars)
-                    .into_iter()
-                    .flatten()
+                tab.into_iter()
+                    .flat_map(|tab| &tab.user_vars)
                     .map(|(k, v)| (k.as_str(), v.as_str())),
             )?,
         )?;
@@ -158,16 +157,16 @@ impl Config {
             Ok((text.replace(['\n', '\r', '\t'], " "), color))
         };
         let raw: Vec<_> = match value {
-            Value::String(text) => Ok(vec![segment(text.to_str()?.to_owned(), None)?]),
+            Value::String(text) => vec![segment(text.to_str()?.to_owned(), None)?],
             Value::Table(segments) => segments
                 .sequence_values::<Table>()
                 .map(|s| {
                     let s = s?;
                     segment(s.get("text")?, s.get("color")?)
                 })
-                .collect(),
+                .collect::<Result<_>>()?,
             _ => bail!("{name} must return a string or an array of {{text, color}} segments"),
-        }?;
+        };
         Ok(raw
             .into_iter()
             .flat_map(|(text, color)| crate::ansi::segments(&text, color))

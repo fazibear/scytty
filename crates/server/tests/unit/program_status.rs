@@ -10,7 +10,7 @@ fn replaces_inherits_clears_and_bounds_records() {
         &mut records,
         "state=working:app=cargo:progress=40:msg=SGVsbG8="
     ));
-    assert_eq!(records.state().as_deref(), Some("working"));
+    assert_eq!(records.state(), Some("working"));
     assert_eq!(records.snapshot()[""].message.as_deref(), Some("Hello"));
     assert!(report(
         &mut records,
@@ -29,7 +29,7 @@ fn replaces_inherits_clears_and_bounds_records() {
     assert_eq!(records.snapshot()["build/test"].progress, None);
     assert_eq!(records.snapshot()["build/test"].title, None);
     assert!(records.prompt());
-    assert_eq!(records.state().as_deref(), Some("done"));
+    assert_eq!(records.state(), Some("done"));
     assert!(report(&mut records, "state=clear:id=build"));
     assert_eq!(records.state(), None);
     for n in 0..256 {
@@ -49,9 +49,9 @@ fn clear_is_subtree_scoped_and_latest_state_is_not_an_aggregate() {
     report(&mut records, "state=working:app=cargo");
     report(&mut records, "state=working:id=builder");
     report(&mut records, "state=blocked:id=build/test");
-    assert_eq!(records.state().as_deref(), Some("blocked"));
+    assert_eq!(records.state(), Some("blocked"));
     assert!(report(&mut records, "state=working:app=cargo"));
-    assert_eq!(records.state().as_deref(), Some("working"));
+    assert_eq!(records.state(), Some("working"));
     report(&mut records, "state=clear:id=build");
     assert!(records.values.contains_key("builder"));
     assert!(!records.values.contains_key("build/test"));
@@ -74,7 +74,7 @@ fn engine_validates_untrusted_reports_and_duplicate_keys() {
         &mut records,
         "state=working:state=blocked:kind=auth:progress=999:app=cargo"
     ));
-    assert_eq!(records.state().as_deref(), Some("blocked"));
+    assert_eq!(records.state(), Some("blocked"));
     assert_eq!(records.snapshot()[""].kind.as_deref(), Some("auth"));
     assert_eq!(records.snapshot()[""].progress, None);
 }

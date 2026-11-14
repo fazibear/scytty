@@ -64,9 +64,10 @@ impl Layout {
     }
     pub(super) fn update(&mut self, cells: &[Cell], terminal: &Terminal) -> Result<()> {
         self.cols = usize::from(terminal.cols()?);
-        self.cells = cells.to_vec();
-        self.to_visual = cells.iter().map(|cell| cell.x).collect();
-        self.to_logical = self.to_visual.clone();
+        cells.clone_into(&mut self.cells);
+        self.to_visual.clear();
+        self.to_visual.extend(cells.iter().map(|cell| cell.x));
+        self.to_logical.clone_from(&self.to_visual);
         if cells.is_empty() {
             return Ok(());
         }

@@ -118,7 +118,7 @@ impl Session {
             .tabs
             .iter()
             .map(|t| TabInfo {
-                state: t.metadata.program_status.state(),
+                state: t.metadata.program_status.state().map(str::to_owned),
                 program_status: t.metadata.program_status.snapshot(),
                 id: t.id,
                 title: t.terminal.title().unwrap_or("").to_string(),
@@ -165,16 +165,17 @@ fn tab_cwd(tab: &Tab) -> Option<std::path::PathBuf> {
 }
 
 fn pty_size(cols: u16, rows: u16, width: u32, height: u32) -> PtySize {
+    // The PTY ioctl has 16-bit fields for the total pixel dimensions.
+    let pixels = |cells: u16, extent: u32| {
+        u32::from(cells)
+            .saturating_mul(extent)
+            .min(u32::from(u16::MAX)) as u16
+    };
     PtySize {
         cols,
         rows,
-        // The PTY ioctl has 16-bit fields for the total pixel dimensions.
-        pixel_width: u32::from(cols)
-            .saturating_mul(width)
-            .min(u32::from(u16::MAX)) as u16,
-        pixel_height: u32::from(rows)
-            .saturating_mul(height)
-            .min(u32::from(u16::MAX)) as u16,
+        pixel_width: pixels(cols, width),
+        pixel_height: pixels(rows, height),
     }
 }
 

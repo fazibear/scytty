@@ -9,7 +9,7 @@ pub fn segments(text: &str, default: Option<Rgba>) -> Vec<Segment> {
     let mut result = Vec::new();
     let mut plain = String::new();
     let mut color = default;
-    let mut chars = text.chars().peekable();
+    let mut chars = text.chars();
     while let Some(ch) = chars.next() {
         if ch != '\x1b' {
             if !ch.is_control() {

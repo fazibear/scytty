@@ -5,9 +5,9 @@ fn program_status_fragmentation_queries_prompts_and_reset() {
     let mut metadata = Metadata::default();
     assert!(!metadata.feed(b"\x1b]7501;state=wor"));
     assert!(metadata.feed(b"king:app=cargo:progress=40\x1b\\"));
-    assert_eq!(metadata.program_status.state().as_deref(), Some("working"));
+    assert_eq!(metadata.program_status.state(), Some("working"));
     assert!(!metadata.feed(b"\x1b]7501;state=error\x18\x07"));
-    assert_eq!(metadata.program_status.state().as_deref(), Some("working"));
+    assert_eq!(metadata.program_status.state(), Some("working"));
     assert!(!metadata.feed(b"\x1b]7501;?\x07\x1b]7501;?\x1b\\"));
     assert_eq!(metadata.replies, b"\x1b]7501;?:states=idle,working,done,blocked,error:kinds=permission,question,auth\x07\x1b]7501;?:states=idle,working,done,blocked,error:kinds=permission,question,auth\x1b\\");
     assert!(metadata.feed(b"\x1b]133;A\x07"));
