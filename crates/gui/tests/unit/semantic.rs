@@ -9,9 +9,7 @@ fn prompt_navigation_and_output_selection_survive_snapshot() -> Result<()> {
         ..Default::default()
     })?;
     terminal.vt_write(b"\x1b]133;A\x07$ \x1b]133;B\x07one\r\n\x1b]133;C\x07first output\r\n\x1b]133;D;0\x07\x1b]133;A\x07$ \x1b]133;B\x07two\r\n\x1b]133;C\x07second output\r\n\x1b]133;D;0\x07\x1b]133;A\x07$ \x1b]133;B\x07");
-    let mut bytes = Vec::new();
-    ghostty_vt::snapshot::encode_to(&terminal, &mut bytes)?;
-    let mut terminal = ghostty_vt::snapshot::Decoder::from_slice(&bytes).decode()?;
+    let mut terminal = crate::tests::roundtrip(&terminal)?;
     assert_eq!(prompt_row(&terminal, true)?, Some(0));
     terminal.scroll_viewport(ScrollViewport::Top);
     assert_eq!(prompt_row(&terminal, false)?, Some(2));

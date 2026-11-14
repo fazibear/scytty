@@ -112,9 +112,7 @@ fn wrapped_paragraph_context_survives_viewport_scrolling_and_snapshots() -> Resu
     tab.terminal.scroll_viewport(ScrollViewport::Delta(1));
     tab.snapshot()?;
     assert_eq!(row(&tab, 0), second);
-    let mut bytes = Vec::new();
-    ghostty_vt::snapshot::encode_to(&tab.terminal, &mut bytes)?;
-    let mut restored = Tab::new(ghostty_vt::snapshot::Decoder::from_slice(&bytes).decode()?)?;
+    let mut restored = Tab::new(crate::tests::roundtrip(&tab.terminal)?)?;
     restored.terminal.scroll_viewport(ScrollViewport::Row(
         tab.terminal.scrollbar()?.offset as usize,
     ));

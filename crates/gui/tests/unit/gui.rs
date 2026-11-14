@@ -1,4 +1,11 @@
 use super::*;
+use ghostty_vt::Terminal;
+
+pub(super) fn roundtrip(terminal: &Terminal) -> Result<Terminal> {
+    let mut bytes = Vec::new();
+    ghostty_vt::snapshot::encode_to(terminal, &mut bytes)?;
+    Ok(ghostty_vt::snapshot::Decoder::from_slice(&bytes).decode()?)
+}
 
 #[test]
 fn mouse_cleanup_releases_original_tabs_and_all_buttons_even_after_errors() {

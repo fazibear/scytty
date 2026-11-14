@@ -220,9 +220,7 @@ fn negotiated_modes_survive_snapshot_and_pop_back_to_legacy() -> Result<()> {
     let mut terminal = Terminal::new(TerminalOptions::default())?;
     terminal.vt_write(b"\x1b[>1u\x1b[>31u");
     let escape = stroke("escape", None, Modifiers::default());
-    let mut snapshot = Vec::new();
-    ghostty_vt::snapshot::encode_to(&terminal, &mut snapshot)?;
-    let mut restored = ghostty_vt::snapshot::Decoder::from_slice(&snapshot).decode()?;
+    let mut restored = crate::tests::roundtrip(&terminal)?;
     assert_eq!(
         send(&terminal, &escape, key::Action::Press)?,
         send(&restored, &escape, key::Action::Press)?

@@ -1,4 +1,5 @@
 use super::*;
+use crate::tests::roundtrip;
 #[test]
 fn bundled_error_reaper_loads_and_is_cached() {
     assert!(Arc::ptr_eq(&error_reaper(), &error_reaper()));
@@ -122,10 +123,7 @@ fn unicode_placeholders_render_tiles_without_drawing_the_marker() -> Result<()> 
             .iter()
             .all(|p| Arc::ptr_eq(&p.image, &tab.placements[0].image))
     );
-    let mut bytes = Vec::new();
-    ghostty_vt::snapshot::encode_to(&tab.terminal, &mut bytes)?;
-    let mut restored =
-        crate::Tab::new(ghostty_vt::snapshot::Decoder::from_slice(&bytes).decode()?)?;
+    let mut restored = crate::Tab::new(roundtrip(&tab.terminal)?)?;
     frame(&mut restored)?;
     assert_eq!(restored.placements.len(), tab.placements.len());
     assert!(
@@ -182,10 +180,7 @@ fn relative_placements_follow_fixed_and_virtual_parents() -> Result<()> {
             .iter()
             .any(|p| p.clip.origin == point(px(10.), px(80.)))
     );
-    let mut bytes = Vec::new();
-    ghostty_vt::snapshot::encode_to(&tab.terminal, &mut bytes)?;
-    let mut restored =
-        crate::Tab::new(ghostty_vt::snapshot::Decoder::from_slice(&bytes).decode()?)?;
+    let mut restored = crate::Tab::new(roundtrip(&tab.terminal)?)?;
     frame(&mut restored)?;
     assert_eq!(restored.placements.len(), tab.placements.len());
     assert!(

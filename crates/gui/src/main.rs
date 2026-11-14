@@ -795,16 +795,7 @@ impl Gui {
         let width = (f32::from(self.cell.width) as u32).max(1);
         let height = (f32::from(self.cell.height) as u32).max(1);
         let mut event = mouse::Event::new()?;
-        let mut mods = key::Mods::empty();
-        if modifiers.shift {
-            mods |= key::Mods::SHIFT;
-        }
-        if modifiers.control {
-            mods |= key::Mods::CTRL;
-        }
-        if modifiers.alt {
-            mods |= key::Mods::ALT;
-        }
+        let mods = keyboard::shared_mods(modifiers);
         event
             .set_action(action)
             .set_mods(mods)
@@ -1039,25 +1030,12 @@ impl Gui {
                     &mut self.scroll_remainder,
                     f32::from(delta.y) / f32::from(self.cell.height),
                 );
-                let mut mods = key::Mods::empty();
-                if event.modifiers.shift {
-                    mods |= key::Mods::SHIFT;
-                }
-                if event.modifiers.control {
-                    mods |= key::Mods::CTRL;
-                }
-                if event.modifiers.alt {
-                    mods |= key::Mods::ALT;
-                }
-                let mut bytes = tab.scroll(
-                    rows,
-                    ghostty_vt::mouse::Position {
-                        x: f32::from(event.position.x - self.bounds.left()).max(0.),
-                        y: f32::from(event.position.y - self.bounds.top()).max(0.),
-                    },
-                    self.cell,
-                    mods,
-                )?;
+                let mods = keyboard::shared_mods(event.modifiers);
+                let position = ghostty_vt::mouse::Position {
+                    x: f32::from(event.position.x - self.bounds.left()).max(0.),
+                    y: f32::from(event.position.y - self.bounds.top()).max(0.),
+                };
+                let mut bytes = tab.scroll(rows, position, self.cell, mods)?;
                 let columns = scroll_rows(
                     &mut self.horizontal_scroll_remainder,
                     f32::from(delta.x) / f32::from(self.cell.width),
@@ -1073,10 +1051,7 @@ impl Gui {
                             mouse::Button::Seven
                         }))
                         .set_mods(mods)
-                        .set_position(mouse::Position {
-                            x: f32::from(event.position.x - self.bounds.left()).max(0.),
-                            y: f32::from(event.position.y - self.bounds.top()).max(0.),
-                        });
+                        .set_position(position);
                     for _ in 0..columns.unsigned_abs() {
                         bytes.extend(tab.mouse(&wheel, self.cell, false)?);
                     }

@@ -1,5 +1,5 @@
 use super::*;
-use crate::{keyboard::terminal_key, selection_point};
+use crate::{selection_point, tests::roundtrip};
 use ghostty_vt::TerminalOptions;
 use ghostty_vt::selection::Selection;
 use ghostty_vt::terminal::{Point as TerminalPoint, PointCoordinate};
@@ -21,9 +21,7 @@ fn full_styles_and_resets_survive_snapshots() -> Result<()> {
     assert!(hidden.text.is_empty() && !hidden.blink && !hidden.overline);
     let reset = &tab.cells[4];
     assert!(!reset.bold && !reset.italic && !reset.blink && !reset.overline);
-    let mut bytes = Vec::new();
-    ghostty_vt::snapshot::encode_to(&tab.terminal, &mut bytes)?;
-    let mut restored = Tab::new(ghostty_vt::snapshot::Decoder::from_slice(&bytes).decode()?)?;
+    let mut restored = Tab::new(roundtrip(&tab.terminal)?)?;
     restored.snapshot()?;
     assert!(restored.cells == tab.cells);
     Ok(())
@@ -210,9 +208,7 @@ fn wheel_modes_survive_reconnect_snapshot() -> Result<()> {
         "alternate scrolling must default on"
     );
     terminal.vt_write(b"\x1b[?1049h\x1b[?1002h\x1b[?1006h");
-    let mut bytes = Vec::new();
-    ghostty_vt::snapshot::encode_to(&terminal, &mut bytes)?;
-    let terminal = ghostty_vt::snapshot::Decoder::from_slice(&bytes).decode()?;
+    let terminal = roundtrip(&terminal)?;
     assert!(terminal.is_mouse_tracking()?);
     let mut tab = Tab::new(terminal)?;
     tab.size = (80, 24, 10, 20);
@@ -263,30 +259,14 @@ fn terminal_decorations_include_spaces_wide_cells_colors_and_resets() -> Result<
     assert_eq!(row[2].underline_color, row[2].fg);
     assert_eq!(row[3].underline, Underline::None);
     assert!(!row[3].strikethrough);
-    let mut bytes = Vec::new();
-    ghostty_vt::snapshot::encode_to(&tab.terminal, &mut bytes)?;
-    let mut restored = Tab::new(ghostty_vt::snapshot::Decoder::from_slice(&bytes).decode()?)?;
+    let mut restored = Tab::new(roundtrip(&tab.terminal)?)?;
     restored.snapshot()?;
     assert!(tab.cells == restored.cells);
     Ok(())
 }
 #[test]
-fn key_encoding_and_sync_redraw() -> Result<()> {
+fn synchronized_redraw_expires_and_resets() -> Result<()> {
     let mut terminal = Terminal::new(TerminalOptions::default())?;
-    let mut encoder = key::Encoder::new()?;
-    let mut event = key::Event::new()?;
-    event.set_key(terminal_key("escape").unwrap());
-    let mut bytes = Vec::new();
-    encoder
-        .set_options_from_terminal(&terminal)
-        .encode_to_vec(&event, &mut bytes)?;
-    assert_eq!(bytes, b"\x1b");
-    terminal.vt_write(b"\x1b[>1u");
-    bytes.clear();
-    encoder
-        .set_options_from_terminal(&terminal)
-        .encode_to_vec(&event, &mut bytes)?;
-    assert_eq!(bytes, b"\x1b[27u");
     let mut since = None;
     terminal.vt_write(b"\x1b[?2026hhello");
     assert!(hold_frame(&terminal, &mut since)?);
@@ -343,9 +323,7 @@ fn application_cursor_shapes_and_blink_survive_snapshots() -> Result<()> {
         let cursor = tab.cursor_state.unwrap();
         assert_eq!(cursor.visual_style, style);
         assert_eq!(cursor.blinking, blinking);
-        let mut bytes = Vec::new();
-        ghostty_vt::snapshot::encode_to(&tab.terminal, &mut bytes)?;
-        let mut restored = Tab::new(ghostty_vt::snapshot::Decoder::from_slice(&bytes).decode()?)?;
+        let mut restored = Tab::new(roundtrip(&tab.terminal)?)?;
         restored.snapshot()?;
         assert_eq!(restored.cursor_state, tab.cursor_state);
     }
@@ -378,10 +356,7 @@ fn application_cursor_visibility_and_restore() -> Result<()> {
     for visible in [false, true] {
         tab.terminal
             .vt_write(if visible { b"\x1b[?25h" } else { b"\x1b[?25l" });
-        let mut bytes = Vec::new();
-        ghostty_vt::snapshot::encode_to(&tab.terminal, &mut bytes)?;
-        let terminal = ghostty_vt::snapshot::Decoder::from_slice(&bytes).decode()?;
-        let mut restored = Tab::new(terminal)?;
+        let mut restored = Tab::new(roundtrip(&tab.terminal)?)?;
         restored.snapshot()?;
         assert_eq!(restored.cursor.is_some(), visible);
     }
@@ -414,9 +389,7 @@ fn osc_default_colors_update_cached_cells_and_reset() -> Result<()> {
     assert_eq!(tab.cells[1].bg, Some(rgb(0x112233)));
     assert_eq!(tab.cursor_color, rgb(0x778899));
     assert_eq!(color(tab.terminal.bg_color()?, rgb(0)), rgb(0x445566));
-    let mut bytes = Vec::new();
-    ghostty_vt::snapshot::encode_to(&tab.terminal, &mut bytes)?;
-    let mut tab = Tab::new(ghostty_vt::snapshot::Decoder::from_slice(&bytes).decode()?)?;
+    let mut tab = Tab::new(roundtrip(&tab.terminal)?)?;
     tab.snapshot()?;
     assert_eq!(tab.cells[0].fg, rgb(0x112233));
     assert_eq!(tab.cursor_color, rgb(0x778899));
@@ -489,30 +462,6 @@ fn incremental_cells_match_full_rebuilds() -> Result<()> {
 }
 
 #[test]
-#[ignore = "manual snapshot timing; run with --ignored --nocapture"]
-fn snapshot_timing() -> Result<()> {
-    let mut tab = Tab::new(Terminal::new(TerminalOptions {
-        cols: 120,
-        rows: 40,
-        ..Default::default()
-    })?)?;
-    tab.terminal.vt_write(&b"abcdef ".repeat(600));
-    tab.snapshot()?;
-    let start = Instant::now();
-    for _ in 0..500 {
-        tab.snapshot()?;
-    }
-    eprintln!("500 idle snapshots: {:?}", start.elapsed());
-    let start = Instant::now();
-    for _ in 0..500 {
-        tab.terminal.vt_write(b"\x1b[1;1HX");
-        tab.snapshot()?;
-    }
-    eprintln!("500 single-row snapshots: {:?}", start.elapsed());
-    Ok(())
-}
-
-#[test]
 fn unicode_graphemes_keep_terminal_widths_copy_and_reconnect() -> Result<()> {
     for (text, width) in [
         ("e\u{301}", 1),
@@ -557,9 +506,7 @@ fn unicode_graphemes_keep_terminal_widths_copy_and_reconnect() -> Result<()> {
             .set_selection(Some(&Selection::new(start, end, false)))?;
         assert_eq!(selected_text(&tab.terminal)?.as_deref(), Some(text));
         tab.terminal.set_selection(None)?;
-        let mut bytes = Vec::new();
-        ghostty_vt::snapshot::encode_to(&tab.terminal, &mut bytes)?;
-        let mut restored = Tab::new(ghostty_vt::snapshot::Decoder::from_slice(&bytes).decode()?)?;
+        let mut restored = Tab::new(roundtrip(&tab.terminal)?)?;
         restored.snapshot()?;
         assert!(restored.cells == tab.cells, "{text:?}");
     }

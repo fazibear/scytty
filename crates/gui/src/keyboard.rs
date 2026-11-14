@@ -96,6 +96,14 @@ fn same_key(a: &Keystroke, b: &Keystroke) -> bool {
     a.key == b.key || terminal_key(&a.key).is_some_and(|key| Some(key) == terminal_key(&b.key))
 }
 
+pub(super) fn shared_mods(modifiers: Modifiers) -> key::Mods {
+    let mut mods = key::Mods::empty();
+    mods.set(key::Mods::SHIFT, modifiers.shift);
+    mods.set(key::Mods::CTRL, modifiers.control);
+    mods.set(key::Mods::ALT, modifiers.alt);
+    mods
+}
+
 pub(super) fn encode(
     terminal: &Terminal,
     encoder: &mut key::Encoder,
@@ -145,16 +153,7 @@ pub(super) fn encode(
         return Ok(None);
     }
     let mut event = key::Event::new()?;
-    let mut mods = key::Mods::empty();
-    if m.shift {
-        mods |= key::Mods::SHIFT;
-    }
-    if m.control {
-        mods |= key::Mods::CTRL;
-    }
-    if m.alt {
-        mods |= key::Mods::ALT;
-    }
+    let mut mods = shared_mods(m);
     if m.platform {
         mods |= key::Mods::SUPER;
     }
