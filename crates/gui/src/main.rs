@@ -1174,6 +1174,9 @@ impl Gui {
             vec![]
         };
         tab.prepare_frame(bounds, cell)?;
+        if tab.animation_deadline.is_some() {
+            window.request_animation_frame();
+        }
         let hovered_cells = if let Some(position) = self.link_hovered {
             links::hovered_cells(tab, tab.point(position, bounds, cell)?)?
         } else {

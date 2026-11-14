@@ -33,6 +33,8 @@ pub(super) struct Tab {
     pub(super) placements: Vec<images::Placement>,
     image_iterator: ghostty_vt::render::ImageIterator,
     image_data: Vec<ghostty_vt::render::ImagePlacement>,
+    animation_epoch: Instant,
+    pub(super) animation_deadline: Option<u64>,
     pub(super) cells: Vec<Cell>,
     pub(super) bidi: crate::bidi::Layout,
     pub(super) paint_cache: terminal_paint::Cache,
@@ -63,6 +65,8 @@ impl Tab {
             placements: Vec::new(),
             image_iterator: ghostty_vt::render::ImageIterator::new()?,
             image_data: Vec::new(),
+            animation_epoch: Instant::now(),
+            animation_deadline: None,
             cells: vec![],
             bidi: Default::default(),
             paint_cache: Default::default(),
@@ -244,9 +248,13 @@ impl Tab {
     }
     // Images must commit with text, even when only the image placements changed.
     pub(super) fn snapshot(&mut self) -> Result<bool> {
+        self.snapshot_at(self.animation_epoch.elapsed().as_millis() as u64)
+    }
+    fn snapshot_at(&mut self, now_ms: u64) -> Result<bool> {
         if hold_frame(&self.terminal, &mut self.hold_since)? {
             return Ok(false);
         }
+        self.animation_deadline = self.terminal.tick_kitty_animations(now_ms)?;
         let snapshot = self.render.update(&self.terminal)?;
         let mut images = self.image_iterator.update(&snapshot)?;
         self.image_data.clear();

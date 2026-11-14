@@ -30,6 +30,84 @@ fn full_styles_and_resets_survive_snapshots() -> Result<()> {
 }
 
 #[test]
+fn kitty_animation_clock_advances_frames_and_stops_redrawing() -> Result<()> {
+    let mut terminal = Terminal::new(TerminalOptions::default())?;
+    resize_terminal(&mut terminal, 80, 24, 10, 20)?;
+    let mut tab = Tab::new(terminal)?;
+    tab.terminal.vt_write(b"\x1b_Ga=T,q=2,f=24,s=1,v=1,i=1,c=1,r=1;/wAA\x1b\\\x1b_Ga=f,q=2,f=24,s=1,v=1,i=1,z=75;AAD/\x1b\\\x1b_Ga=a,q=2,i=1,r=1,z=50\x1b\\\x1b_Ga=a,q=2,i=1,s=3,v=1\x1b\\");
+    assert!(tab.snapshot_at(0)?);
+    assert_eq!(tab.animation_deadline, Some(50));
+    let red = tab.image_data[0].image_generation;
+    tab.snapshot_at(49)?;
+    assert_eq!(tab.image_data[0].image_generation, red);
+    // Synchronized redraw must not commit a partially updated animation.
+    tab.terminal.vt_write(b"\x1b[?2026h");
+    assert!(!tab.snapshot_at(50)?);
+    assert_eq!(tab.image_data[0].image_generation, red);
+    tab.terminal.vt_write(b"\x1b[?2026l");
+    tab.snapshot_at(50)?;
+    assert_eq!(tab.animation_deadline, Some(125));
+    assert_ne!(tab.image_data[0].image_generation, red);
+    assert_eq!(
+        tab.terminal.kitty_graphics()?.image(1).unwrap().data()?,
+        &[0, 0, 255, 255]
+    );
+    tab.snapshot_at(125)?;
+    assert_eq!(tab.animation_deadline, Some(175));
+    assert_eq!(
+        tab.terminal.kitty_graphics()?.image(1).unwrap().data()?,
+        &[255, 0, 0, 255]
+    );
+    tab.terminal.vt_write(b"\x1b_Ga=a,q=2,i=1,s=1\x1b\\");
+    tab.snapshot_at(200)?;
+    assert!(tab.animation_deadline.is_none());
+    // Client-driven frame selection works while playback is stopped.
+    tab.terminal.vt_write(b"\x1b_Ga=a,q=2,i=1,c=2\x1b\\");
+    tab.snapshot_at(250)?;
+    assert!(tab.animation_deadline.is_none());
+    assert_eq!(
+        tab.terminal.kitty_graphics()?.image(1).unwrap().data()?,
+        &[0, 0, 255, 255]
+    );
+    tab.terminal
+        .vt_write(b"\x1b_Ga=a,q=2,i=1,c=1,s=3,v=2\x1b\\");
+    tab.snapshot_at(300)?;
+    tab.snapshot_at(350)?;
+    tab.snapshot_at(425)?;
+    assert!(tab.animation_deadline.is_none());
+    tab.terminal.vt_write(b"\x1b_Ga=d,d=A,q=2\x1b\\");
+    tab.snapshot_at(500)?;
+    assert!(tab.image_data.is_empty());
+    assert!(tab.animation_deadline.is_none());
+    Ok(())
+}
+
+#[test]
+fn kitty_loading_animation_resumes_when_another_frame_arrives() -> Result<()> {
+    let mut terminal = Terminal::new(TerminalOptions::default())?;
+    resize_terminal(&mut terminal, 80, 24, 10, 20)?;
+    let mut tab = Tab::new(terminal)?;
+    tab.terminal.vt_write(
+        b"\x1b_Ga=T,q=2,f=24,s=1,v=1,i=1,c=1,r=1;/wAA\x1b\\\x1b_Ga=a,q=2,i=1,r=1,z=50,s=2\x1b\\",
+    );
+    tab.snapshot_at(0)?;
+    tab.snapshot_at(50)?;
+    assert!(tab.animation_deadline.is_none());
+    tab.terminal
+        .vt_write(b"\x1b_Ga=f,q=2,f=24,s=1,v=1,i=1,z=75;AAD/\x1b\\");
+    tab.snapshot_at(100)?;
+    assert_eq!(tab.animation_deadline, Some(150));
+    tab.snapshot_at(150)?;
+    assert_eq!(
+        tab.terminal.kitty_graphics()?.image(1).unwrap().data()?,
+        &[0, 0, 255, 255]
+    );
+    tab.snapshot_at(225)?;
+    assert!(tab.animation_deadline.is_none());
+    Ok(())
+}
+
+#[test]
 fn mouse_buttons_motion_and_protocols() -> Result<()> {
     use ghostty_vt::mouse::{Action, Button, Event, Position};
     let mut tab = Tab::new(Terminal::new(TerminalOptions::default())?)?;
