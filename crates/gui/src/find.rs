@@ -1,13 +1,11 @@
+use crate::search::Search;
 use anyhow::Result;
-use ghostty_vt::{
-    Terminal,
-    search::{Search, Status},
-    terminal::PointSpace,
-};
+use ghostty_vt::{Terminal, terminal::PointSpace};
 use std::{
     ops::Range,
     time::{Duration, Instant},
 };
+use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Default)]
 pub struct Find {
@@ -20,22 +18,10 @@ pub struct Find {
 
 impl Find {
     pub fn utf16_range(&self, range: Range<usize>) -> Range<usize> {
-        self.query[..range.start].encode_utf16().count()
-            ..self.query[..range.end].encode_utf16().count()
+        crate::unicode::utf16_range(&self.query, range)
     }
     pub fn byte_range(&self, range: Range<usize>) -> Range<usize> {
-        fn index(text: &str, offset: usize) -> usize {
-            let mut units = 0;
-            for (i, c) in text.char_indices() {
-                if units + c.len_utf16() > offset {
-                    return i;
-                }
-                units += c.len_utf16();
-            }
-            text.len()
-        }
-        let start = index(&self.query, range.start);
-        start..index(&self.query, range.end).max(start)
+        crate::unicode::byte_range(&self.query, range)
     }
     pub fn replace(&mut self, range: Option<Range<usize>>, text: &str) -> Range<usize> {
         let range = range
@@ -45,11 +31,11 @@ impl Find {
         // Keep pasted queries single-line and bound work/memory from external input.
         let budget = 4096usize.saturating_sub(self.query.len() - range.len());
         let mut replacement = String::new();
-        for c in text.chars().filter(|c| !c.is_control()) {
-            if replacement.len() + c.len_utf8() > budget {
+        for grapheme in text.graphemes(true) {
+            if replacement.len() + grapheme.len() > budget {
                 break;
             }
-            replacement.push(c);
+            replacement.extend(grapheme.chars().filter(|c| !c.is_control()));
         }
         self.query.replace_range(range.clone(), &replacement);
         let inserted = range.start..range.start + replacement.len();
@@ -64,21 +50,26 @@ impl Find {
         } else {
             self.selection.end
         };
-        let previous = self.query[..caret]
-            .char_indices()
+        let previous = self
+            .query
+            .grapheme_indices(true)
+            .take_while(|(i, _)| *i < caret)
             .last()
             .map_or(0, |(i, _)| i);
-        let next = self.query[caret..]
-            .chars()
-            .next()
-            .map_or(self.query.len(), |c| caret + c.len_utf8());
+        let next = self
+            .query
+            .grapheme_indices(true)
+            .find(|(i, _)| *i > caret)
+            .map_or(self.query.len(), |(i, _)| i);
+        let boundary =
+            caret == self.query.len() || self.query.grapheme_indices(true).any(|(i, _)| i == caret);
         match key {
             "backspace" | "delete" => {
                 if self.selection.is_empty() {
                     self.selection = if key == "backspace" {
-                        previous..self.selection.end
+                        previous..if boundary { caret } else { next }
                     } else {
-                        self.selection.start..next
+                        (if boundary { caret } else { previous })..next
                     };
                 }
                 self.replace(None, "");
@@ -113,13 +104,10 @@ impl Find {
 
 pub fn advance(search: &mut Search, terminal: &Terminal, query: &str) -> Result<bool> {
     search.set_needle(terminal, Some(query))?;
-    search.feed(terminal)?;
     let deadline = Instant::now() + Duration::from_millis(2);
     loop {
-        match search.tick()? {
-            Status::Complete => return Ok(false),
-            Status::FeedRequired => search.feed(terminal)?,
-            Status::Running => {}
+        if !search.tick(terminal)? {
+            return Ok(false);
         }
         if Instant::now() >= deadline {
             return Ok(true);

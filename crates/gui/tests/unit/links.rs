@@ -32,6 +32,27 @@ fn terminal_links_and_unsafe_schemes() -> Result<()> {
     Ok(())
 }
 #[test]
+fn unicode_url_hover_includes_wide_tails_and_combining_graphemes() -> Result<()> {
+    use ghostty_vt::{Terminal, TerminalOptions, terminal::PointCoordinate};
+    let mut tab = crate::Tab::new(Terminal::new(TerminalOptions::default())?)?;
+    let url = "https://example.com/界e\u{301}👩🏽‍💻";
+    tab.terminal.vt_write(url.as_bytes());
+    tab.snapshot()?;
+    for x in [20, 21, 22, 23, 24] {
+        let point = Point::Viewport(PointCoordinate { x, y: 0 });
+        assert_eq!(at_terminal(&tab, point)?.as_deref(), Some(url));
+        assert_eq!(
+            tab.cells[hovered_cells(&tab, point)?]
+                .iter()
+                .map(|c| c.text.as_str())
+                .collect::<String>(),
+            url
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn hover_includes_wrapped_osc8_label() -> Result<()> {
     use ghostty_vt::{Terminal, TerminalOptions, terminal::PointCoordinate};
     let mut tab = crate::Tab::new(Terminal::new(TerminalOptions {

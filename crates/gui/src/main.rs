@@ -18,6 +18,7 @@ use std::{
     time::{Duration, Instant},
 };
 mod ansi;
+mod bidi;
 mod clipboard;
 mod config;
 mod cursor;
@@ -33,11 +34,13 @@ mod pointer;
 mod reconnect;
 mod remote;
 mod scrollbar;
+mod search;
 mod semantic;
 mod tab;
 mod terminal_paint;
 mod transport;
 mod ui;
+mod unicode;
 use tab::{Cell, Tab, resize_terminal, selected_text};
 mod window_state;
 use config::Config;
@@ -419,6 +422,9 @@ impl Gui {
                 Update::Output { id, bytes } => {
                     if let Some(tab) = self.tabs.get_mut(&id) {
                         tab.terminal.vt_write(&bytes);
+                        if let Some(search) = &mut tab.search {
+                            search.feed(&tab.terminal)?;
+                        }
                         for event in tab.terminal.events() {
                             if let ghostty_vt::terminal::Event::ClipboardWrite(write) = event {
                                 if let Some(item) = clipboard::item(write) {
@@ -439,6 +445,9 @@ impl Gui {
                 } => {
                     if let Some(tab) = self.tabs.get_mut(&id) {
                         resize_terminal(&mut tab.terminal, cols, rows, width, height)?;
+                        if let Some(search) = &mut tab.search {
+                            search.feed(&tab.terminal)?;
+                        }
                         tab.size = (cols, rows, width, height);
                         tab.resize_pending = false;
                     }
@@ -628,14 +637,14 @@ impl Gui {
             return Ok(());
         };
         if tab.search.is_none() {
-            tab.search = Some(ghostty_vt::search::Search::new(&tab.terminal)?);
+            tab.search = Some(search::Search::new(&tab.terminal)?);
         }
         let search = tab.search.as_mut().unwrap();
         find::advance(search, &tab.terminal, &find.query)?;
         if previous {
-            search.select_prev(&tab.terminal)?;
+            search.select_prev(&mut tab.terminal)?;
         } else {
-            search.select_next(&tab.terminal)?;
+            search.select_next(&mut tab.terminal)?;
         }
         Ok(())
     }
@@ -741,13 +750,7 @@ impl Gui {
         let Some(tab) = self.tabs.get(&self.active) else {
             return Ok(None);
         };
-        let point = selection_point(
-            position,
-            self.bounds,
-            self.cell,
-            tab.terminal.cols()?,
-            tab.terminal.rows()?,
-        );
+        let point = tab.point(position, self.bounds, self.cell)?;
         links::at_terminal(tab, point)
     }
     fn end_mouse_drag(&mut self) {
@@ -906,13 +909,7 @@ impl Gui {
                     return Ok(());
                 }
                 if platform::command_modifier(event.modifiers) && event.modifiers.shift {
-                    let point = selection_point(
-                        event.position,
-                        self.bounds,
-                        self.cell,
-                        tab.terminal.cols()?,
-                        tab.terminal.rows()?,
-                    );
+                    let point = tab.point(event.position, self.bounds, self.cell)?;
                     let selection = tab.terminal.select_output(tab.terminal.grid_ref(point)?)?;
                     tab.terminal.set_selection(selection.as_ref())?;
                     tab.anchor = None;
@@ -920,13 +917,11 @@ impl Gui {
                     return Ok(());
                 }
                 tab.terminal.set_selection(None)?;
-                tab.anchor = Some(tab.terminal.track_grid_ref(selection_point(
+                tab.anchor = Some(tab.terminal.track_grid_ref(tab.point(
                     event.position,
                     self.bounds,
                     self.cell,
-                    tab.terminal.cols()?,
-                    tab.terminal.rows()?,
-                ))?);
+                )?)?);
             }
             Ok(())
         })();
@@ -1011,13 +1006,9 @@ impl Gui {
                 && let Some(anchor) = &tab.anchor
                 && let Some(start) = anchor.snapshot(&tab.terminal)?
             {
-                let end = tab.terminal.grid_ref(selection_point(
-                    event.position,
-                    self.bounds,
-                    self.cell,
-                    tab.terminal.cols()?,
-                    tab.terminal.rows()?,
-                ))?;
+                let end =
+                    tab.terminal
+                        .grid_ref(tab.point(event.position, self.bounds, self.cell)?)?;
                 tab.terminal
                     .set_selection(Some(&Selection::new(start, end, false)))?;
             }
@@ -1149,13 +1140,12 @@ impl Gui {
         }
         let highlights = if let Some(find) = &mut self.find {
             if tab.search.is_none() {
-                tab.search = Some(ghostty_vt::search::Search::new(&tab.terminal)?);
+                tab.search = Some(search::Search::new(&tab.terminal)?);
             }
             let search = tab.search.as_mut().unwrap();
             let running = find::advance(search, &tab.terminal, &find.query)?;
-            if search.selected_index()?.is_none() && search.total_matches()? > 0 {
-                search.select_next(&tab.terminal)?;
-                search.feed(&tab.terminal)?;
+            if !running && search.selected_index()?.is_none() && search.total_matches()? > 0 {
+                search.select_next(&mut tab.terminal)?;
             }
             let stats = (search.total_matches()?, search.selected_index()?, running);
             if find.stats != stats {
@@ -1171,21 +1161,12 @@ impl Gui {
         };
         tab.prepare_frame(bounds, cell)?;
         let hovered_cells = if let Some(position) = self.link_hovered {
-            links::hovered_cells(
-                tab,
-                selection_point(
-                    position,
-                    bounds,
-                    cell,
-                    tab.terminal.cols()?,
-                    tab.terminal.rows()?,
-                ),
-            )?
+            links::hovered_cells(tab, tab.point(position, bounds, cell)?)?
         } else {
             0..0
         };
         tab.paint_cache.prepare(
-            &tab.cells,
+            &tab.bidi.cells,
             &font,
             font_size,
             cell,
@@ -1199,21 +1180,23 @@ impl Gui {
             }
             tab.paint_cache.backgrounds(bounds.origin, cell, window);
             for highlight in &highlights {
-                window.paint_quad(fill(
-                    Bounds::new(
-                        bounds.origin
-                            + point(
-                                cell.width * highlight.x as f32,
-                                cell.height * highlight.y as f32,
-                            ),
-                        size(cell.width * highlight.width as f32, cell.height),
-                    ),
-                    if highlight.selected {
-                        rgba(0xb36b00dd)
-                    } else {
-                        rgba(0x80700099)
-                    },
-                ));
+                for x in highlight.x..highlight.x + highlight.width {
+                    window.paint_quad(fill(
+                        Bounds::new(
+                            bounds.origin
+                                + point(
+                                    cell.width * tab.bidi.visual_x(x, highlight.y) as f32,
+                                    cell.height * highlight.y as f32,
+                                ),
+                            size(cell.width, cell.height),
+                        ),
+                        if highlight.selected {
+                            rgba(0xb36b00dd)
+                        } else {
+                            rgba(0x80700099)
+                        },
+                    ));
+                }
             }
             for image in images.iter().filter(|i| i.z < 0 && i.z >= i32::MIN / 2) {
                 image.paint(window)?;
@@ -1231,7 +1214,7 @@ impl Gui {
                     Bounds::new(
                         bounds.origin
                             + point(
-                                cell.width * c.x as f32,
+                                cell.width * tab.bidi.visual_x(c.x, c.y) as f32,
                                 cell.height * (c.y + 1) as f32 - px(2.),
                             ),
                         size(cell.width, px(1.)),
@@ -1261,7 +1244,11 @@ impl Gui {
                     .text_system()
                     .shape_line(self.marked.clone().into(), font_size, &[run], None)
                     .paint(
-                        bounds.origin + point(cell.width * x as f32, cell.height * y as f32),
+                        bounds.origin
+                            + point(
+                                cell.width * tab.bidi.visual_x(x as usize, y as usize) as f32,
+                                cell.height * y as f32,
+                            ),
                         cell.height,
                         window,
                         cx,
@@ -1453,15 +1440,9 @@ impl EntityInputHandler for Gui {
             *actual = Some(find.utf16_range(range.clone()));
             return Some(find.query[range].to_owned());
         }
-        *actual = Some(range.clone());
-        Some(
-            self.marked
-                .encode_utf16()
-                .skip(range.start)
-                .take(range.len())
-                .collect::<Vec<_>>(),
-        )
-        .map(|v| String::from_utf16_lossy(&v))
+        let range = unicode::byte_range(&self.marked, range);
+        *actual = Some(unicode::utf16_range(&self.marked, range.clone()));
+        Some(self.marked[range].to_owned())
     }
     fn selected_text_range(
         &mut self,
@@ -1524,6 +1505,8 @@ impl EntityInputHandler for Gui {
             let inserted = find.replace(range, text);
             let start = find.utf16_range(inserted.clone()).start;
             if let Some(selected) = selected {
+                let text = &find.query[inserted.clone()];
+                let selected = unicode::utf16_range(text, unicode::byte_range(text, selected));
                 find.selection = find.byte_range(start + selected.start..start + selected.end);
                 find.reversed = false;
             }
@@ -1531,18 +1514,7 @@ impl EntityInputHandler for Gui {
             cx.notify();
             return;
         }
-        let mut units: Vec<_> = self.marked.encode_utf16().collect();
-        let range = range.unwrap_or(0..units.len());
-        let start = range.start.min(units.len());
-        let end = range.end.max(start).min(units.len());
-        units.splice(start..end, text.encode_utf16());
-        self.marked = String::from_utf16_lossy(&units);
-        self.marked_selection = selected
-            .map(|r| start + r.start..start + r.end)
-            .unwrap_or_else(|| {
-                let end = self.marked.encode_utf16().count();
-                end..end
-            });
+        self.marked_selection = unicode::replace_marked(&mut self.marked, range, text, selected);
         cx.notify();
     }
     fn bounds_for_range(
@@ -1558,7 +1530,9 @@ impl EntityInputHandler for Gui {
                 size(px(200.), px(32.)),
             ));
         }
-        let (x, y) = self.tabs.get(&self.active)?.cursor?;
+        let tab = self.tabs.get(&self.active)?;
+        let (x, y) = tab.cursor?;
+        let x = tab.bidi.visual_x(x as usize, y as usize);
         Some(Bounds::new(
             self.bounds.origin + point(self.cell.width * x as f32, self.cell.height * y as f32),
             self.cell,

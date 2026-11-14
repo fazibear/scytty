@@ -58,8 +58,13 @@ pub(super) fn paint(
     }
     let x =
         usize::from(x).saturating_sub(usize::from(state.viewport.is_some_and(|p| p.at_wide_tail)));
-    let c = tab.cells.iter().find(|c| c.x == x && c.y == usize::from(y));
-    let width = if c.is_some_and(|c| !c.narrow) {
+    let x = tab.bidi.visual_x(x, usize::from(y));
+    let c = tab
+        .bidi
+        .cells
+        .iter()
+        .find(|c| c.x == x && c.y == usize::from(y));
+    let width = if c.is_some_and(|c| c.width == 2) {
         cell.width * 2.
     } else {
         cell.width
@@ -90,18 +95,15 @@ pub(super) fn paint(
         });
         let run = TextRun {
             len: c.text.len(),
-            font: font.clone(),
+            font: crate::terminal_paint::styled_font(font, c),
             color: color.into(),
             background_color: None,
             underline: None,
             strikethrough: None,
         };
-        let line = window.text_system().shape_line(
-            c.text.clone().into(),
-            font_size,
-            &[run],
-            Some(cell.width),
-        );
+        let line = window
+            .text_system()
+            .shape_line(c.text.clone().into(), font_size, &[run], None);
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
             line.paint(bounds.origin, cell.height, window, cx)
         })?;

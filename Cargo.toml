@@ -12,6 +12,7 @@ anyhow = "1"
 async-channel = "2.5"
 base64 = "0.23"
 bincode = "1.3"
+caseless = "0.2.2"
 flate2 = "1"
 fontdb = "0.24"
 ghostty-vt = { version = "=0.9.0", default-features = false, features = ["kitty-graphics"] }
@@ -30,6 +31,9 @@ raw-window-handle = { version = "0.6", features = ["std"] }
 scytty-common = { path = "crates/common" }
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.11"
+unicode-bidi = "0.3.18"
+unicode-bidi-mirroring = "0.4"
+unicode-segmentation = "1.13"
 windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Shell"] }
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_Threading"] }
 winresource = { version = "0.1", default-features = false }

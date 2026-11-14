@@ -7,7 +7,7 @@ fn cell(x: usize, text: &str) -> Cell {
         text: text.into(),
         fg: rgb(0xffffff),
         bg: None,
-        narrow: true,
+        width: 1,
         bold: false,
         italic: false,
         blink: false,

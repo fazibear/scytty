@@ -17,7 +17,7 @@ pub(super) struct Cell {
     pub(super) text: String,
     pub(super) fg: Rgba,
     pub(super) bg: Option<Rgba>,
-    pub(super) narrow: bool,
+    pub(super) width: u8,
     pub(super) bold: bool,
     pub(super) italic: bool,
     pub(super) blink: bool,
@@ -32,8 +32,9 @@ pub(super) struct Tab {
     pub(super) images: images::Images,
     pub(super) placements: Vec<images::Placement>,
     pub(super) cells: Vec<Cell>,
+    pub(super) bidi: crate::bidi::Layout,
     pub(super) paint_cache: terminal_paint::Cache,
-    pub(super) search: Option<ghostty_vt::search::Search>,
+    pub(super) search: Option<crate::search::Search>,
     pub(super) cursor: Option<(u16, u16)>,
     pub(super) cursor_color: Rgba,
     pub(super) cursor_state: Option<ghostty_vt::render::Cursor>,
@@ -59,6 +60,7 @@ impl Tab {
             images: Default::default(),
             placements: Vec::new(),
             cells: vec![],
+            bidi: Default::default(),
             paint_cache: Default::default(),
             search: None,
             cursor: None,
@@ -76,6 +78,20 @@ impl Tab {
             exited: false,
             reported_focus: None,
         })
+    }
+    pub(super) fn point(
+        &self,
+        position: gpui::Point<Pixels>,
+        bounds: Bounds<Pixels>,
+        cell: Size<Pixels>,
+    ) -> Result<ghostty_vt::terminal::Point> {
+        Ok(self.bidi.logical_point(crate::selection_point(
+            position,
+            bounds,
+            cell,
+            self.terminal.cols()?,
+            self.terminal.rows()?,
+        )))
     }
     pub(super) fn focus(&mut self, focused: bool) -> Result<Option<&'static [u8]>> {
         if self.exited
@@ -114,8 +130,21 @@ impl Tab {
                 padding_left: 0,
                 padding_right: 0,
             });
+        let position = self.bidi.mouse_position(event.position(), width, height);
+        let translated = if position.x != event.position().x {
+            let mut translated = ghostty_vt::mouse::Event::new()?;
+            translated
+                .set_action(event.action())
+                .set_button(event.button())
+                .set_mods(event.mods())
+                .set_position(position);
+            Some(translated)
+        } else {
+            None
+        };
         let mut bytes = Vec::new();
-        self.mouse_encoder.encode_to_vec(event, &mut bytes)?;
+        self.mouse_encoder
+            .encode_to_vec(translated.as_ref().unwrap_or(event), &mut bytes)?;
         Ok(bytes)
     }
 
@@ -276,7 +305,13 @@ impl Tab {
                 }
                 let mut text = String::new();
                 cell.graphemes_utf8(&mut text)?;
-                if style.invisible {
+                let width = match cell.raw_cell()?.wide()? {
+                    ghostty_vt::screen::CellWide::Narrow => 1,
+                    ghostty_vt::screen::CellWide::Wide => 2,
+                    ghostty_vt::screen::CellWide::SpacerHead
+                    | ghostty_vt::screen::CellWide::SpacerTail => 0,
+                };
+                if style.invisible || width == 0 {
                     text.clear();
                 }
                 let cell = Cell {
@@ -285,7 +320,7 @@ impl Tab {
                     text,
                     fg,
                     bg: (background.is_some() || style.inverse || selected).then_some(bg),
-                    narrow: cell.raw_cell()?.wide()? == ghostty_vt::screen::CellWide::Narrow,
+                    width,
                     bold: style.bold,
                     italic: style.italic,
                     blink: style.blink && !style.invisible,
@@ -318,6 +353,7 @@ impl Tab {
             y += 1;
         }
         snapshot.clean()?;
+        self.bidi.update(&self.cells, &self.terminal)?;
         Ok(true)
     }
 }

@@ -435,6 +435,97 @@ fn snapshot_timing() -> Result<()> {
 }
 
 #[test]
+fn unicode_graphemes_keep_terminal_widths_copy_and_reconnect() -> Result<()> {
+    for (text, width) in [
+        ("e\u{301}", 1),
+        ("a\u{301}\u{308}", 1),
+        ("界", 2),
+        ("👩🏽‍💻", 2),
+        ("🇵🇱", 2),
+        ("1️⃣", 2),
+        ("♥︎", 1),
+        ("♥️", 2),
+        ("कि", 2),
+        ("क्ष", 2),
+        ("بِ", 1),
+        ("שָׁ", 1),
+        ("한", 2),
+    ] {
+        let mut tab = Tab::new(Terminal::new(TerminalOptions::default())?)?;
+        // A PTY may split a UTF-8 scalar or a grapheme across arbitrary reads.
+        for byte in text.as_bytes() {
+            tab.terminal.vt_write(&[*byte]);
+            tab.snapshot()?;
+        }
+        tab.terminal.vt_write(b"X");
+        tab.snapshot()?;
+        assert_eq!(tab.cells[0].text, text, "{text:?}");
+        assert_eq!(tab.cells[0].width, width, "{text:?}");
+        assert_eq!(tab.cells[usize::from(width)].text, "X", "{text:?}");
+        if width == 2 {
+            assert_eq!(tab.cells[1].width, 0);
+            assert!(tab.cells[1].text.is_empty());
+        }
+        let start = tab
+            .terminal
+            .grid_ref(TerminalPoint::Viewport(PointCoordinate { x: 0, y: 0 }))?;
+        let end = tab
+            .terminal
+            .grid_ref(TerminalPoint::Viewport(PointCoordinate {
+                x: u16::from(width) - 1,
+                y: 0,
+            }))?;
+        tab.terminal
+            .set_selection(Some(&Selection::new(start, end, false)))?;
+        assert_eq!(selected_text(&tab.terminal)?.as_deref(), Some(text));
+        tab.terminal.set_selection(None)?;
+        let mut bytes = Vec::new();
+        ghostty_vt::snapshot::encode_to(&tab.terminal, &mut bytes)?;
+        let mut restored = Tab::new(ghostty_vt::snapshot::Decoder::from_slice(&bytes).decode()?)?;
+        restored.snapshot()?;
+        assert!(restored.cells == tab.cells, "{text:?}");
+    }
+    Ok(())
+}
+
+#[test]
+fn wide_wrap_padding_is_not_a_glyph_or_copied_space() -> Result<()> {
+    let mut tab = Tab::new(Terminal::new(TerminalOptions {
+        cols: 4,
+        rows: 3,
+        ..Default::default()
+    })?)?;
+    tab.terminal.vt_write("abc界X".as_bytes());
+    tab.snapshot()?;
+    assert_eq!(tab.cells[3].width, 0);
+    assert!(tab.cells[3].text.is_empty());
+    assert_eq!((tab.cells[4].text.as_str(), tab.cells[4].width), ("界", 2));
+    assert_eq!(tab.cells[5].width, 0);
+    assert!(tab.cells[5].text.is_empty());
+    assert_eq!(tab.cells[6].text, "X");
+    let start = tab
+        .terminal
+        .grid_ref(TerminalPoint::Viewport(PointCoordinate { x: 0, y: 0 }))?;
+    let end = tab
+        .terminal
+        .grid_ref(TerminalPoint::Viewport(PointCoordinate { x: 2, y: 1 }))?;
+    tab.terminal
+        .set_selection(Some(&Selection::new(start, end, false)))?;
+    assert_eq!(selected_text(&tab.terminal)?.as_deref(), Some("abc界X"));
+    resize_terminal(&mut tab.terminal, 8, 3, 9, 18)?;
+    tab.snapshot()?;
+    assert_eq!(tab.cells[3].text, "界");
+    assert_eq!(tab.cells[3].width, 2);
+    assert_eq!(tab.cells[4].width, 0);
+    assert_eq!(tab.cells[5].text, "X");
+    assert_eq!(selected_text(&tab.terminal)?.as_deref(), Some("abc界X"));
+    tab.terminal.vt_write(b"\r\x1b[2Kx");
+    tab.snapshot()?;
+    assert!(tab.cells.iter().all(|c| c.width == 1));
+    Ok(())
+}
+
+#[test]
 fn selection_and_snapshot() -> Result<()> {
     let mut terminal = Terminal::new(TerminalOptions {
         cols: 5,

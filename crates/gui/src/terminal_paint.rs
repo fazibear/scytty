@@ -23,6 +23,7 @@ struct Text {
     x: usize,
     line: ShapedLine,
     expanded: bool,
+    columns: usize,
     blink: bool,
 }
 
@@ -30,7 +31,7 @@ fn blink_visible(elapsed: Duration) -> bool {
     elapsed.as_millis() % 1000 < 500
 }
 
-fn styled_font(font: &Font, cell: &Cell) -> Font {
+pub(super) fn styled_font(font: &Font, cell: &Cell) -> Font {
     let mut font = font.clone();
     if cell.bold {
         font = font.bold();
@@ -42,7 +43,7 @@ fn styled_font(font: &Font, cell: &Cell) -> Font {
 }
 
 fn ascii(cell: &Cell) -> bool {
-    cell.narrow && cell.text.len() == 1 && cell.text.as_bytes()[0].is_ascii_graphic()
+    cell.width == 1 && cell.text.len() == 1 && cell.text.as_bytes()[0].is_ascii_graphic()
 }
 
 // Only batch simple single-cell text; keep complex glyphs on the existing path.
@@ -146,9 +147,11 @@ impl Cache {
                     continue;
                 }
                 let end = run_end(source, i);
-                let expanded = c.narrow
+                let expanded = c.width == 1
                     && source.get(i + 1).is_some_and(|next| {
-                        next.narrow && next.x == c.x + 1 && expand_nerd_icon(&c.text, &next.text)
+                        next.width == 1
+                            && next.x == c.x + 1
+                            && expand_nerd_icon(&c.text, &next.text)
                     });
                 let scale = if expanded { icon_scale } else { 1. };
                 let text: String = source[i..end].iter().map(|c| c.text.as_str()).collect();
@@ -191,6 +194,7 @@ impl Cache {
                             x: c.x,
                             line,
                             expanded: false,
+                            columns: usize::from(c.width),
                             blink: c.blink,
                         });
                     }
@@ -201,6 +205,11 @@ impl Cache {
                     x: c.x,
                     line,
                     expanded,
+                    columns: if expanded {
+                        2
+                    } else {
+                        source[i..end].iter().map(|c| usize::from(c.width)).sum()
+                    },
                     blink: c.blink,
                 });
                 i = end;
@@ -240,8 +249,9 @@ impl Cache {
                     continue;
                 }
                 let origin = origin + point(cell.width * text.x as f32, cell.height * y as f32);
+                let bounds =
+                    Bounds::new(origin, size(cell.width * text.columns as f32, cell.height));
                 if text.expanded {
-                    let bounds = Bounds::new(origin, size(cell.width * 2., cell.height));
                     let origin = origin
                         + point(
                             (cell.width * 2. - text.line.width) / 2.,
@@ -251,7 +261,9 @@ impl Cache {
                         text.line.paint(origin, cell.height, window, cx)
                     })?;
                 } else {
-                    text.line.paint(origin, cell.height, window, cx)?;
+                    window.with_content_mask(Some(ContentMask { bounds }), |window| {
+                        text.line.paint(origin, cell.height, window, cx)
+                    })?;
                 }
             }
             // Decorate the grid, not glyph widths: spaces and wide-cell padding count too.

@@ -29,14 +29,10 @@ pub fn at_terminal(tab: &crate::Tab, point: Point) -> Result<Option<String>> {
     {
         let start = row.len();
         if cell.x == usize::from(coordinate.x) {
-            index = Some(if cell.text.is_empty() && !cell.narrow {
-                previous
-            } else {
-                start
-            });
+            index = Some(if cell.width == 0 { previous } else { start });
         }
         if cell.text.is_empty() {
-            if cell.narrow {
+            if cell.width == 1 {
                 row.push(' ');
             }
         } else {

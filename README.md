@@ -242,8 +242,10 @@ the daemon when safe (restarting ends existing sessions).
 
 - **Cmd+F** on macOS, **Ctrl+Shift+F** elsewhere: search the active tab's buffer,
   including scrollback. **Enter / Shift+Enter** moves to the next/previous match;
-  **Escape** closes search. Matching is literal and ASCII case-insensitive (not
-  full Unicode case folding). Search runs locally, including for SSH sessions,
+  **Escape** closes search. Matching is literal with full, locale-independent Unicode
+  case folding (`Straße` matches `STRASSE`, and `Σ`, `σ`, `ς` match). Matches map
+  back to whole original cells, never half a folding expansion; no normalization
+  is applied. Search runs locally, including for SSH sessions,
   and leaves the terminal's text selection intact.
 
 - **Ctrl+Plus / Ctrl+Minus** (also Cmd on macOS): increase/decrease font size
@@ -484,7 +486,20 @@ GPUI exposes logical keys, not physical scan codes, modifier sides, Num Lock sta
 or all keypad distinctions. Those details and layout-independent alternate codes
 cannot be reported faithfully yet; shifted punctuation may also change identity
 between press and release. Full physical-key support requires a GPUI change.
-Unicode text is passed through, but wide/combined glyph rendering needs more work.
+Unicode rendering preserves Ghostty's grapheme clusters and cell widths, including
+combining marks, CJK, emoji modifiers, ZWJ sequences, flags and variation selectors.
+Wide-cell tails and wrap padding do not draw duplicate glyphs; selection, copy,
+search, reflow and reconnect preserve the original UTF-8 without normalization.
+Search-field editing moves and deletes whole graphemes. Native IME ranges are
+converted safely between UTF-16 and UTF-8, including non-BMP characters.
+Glyph coverage depends on installed fonts and GPUI's platform font fallback.
+Bidirectional text uses the Unicode Bidirectional Algorithm across soft-wrapped
+paragraphs, with the terminal's left-to-right paragraph base. RTL runs, numbers,
+isolates and mirrored punctuation retain grapheme and wide-cell boundaries.
+Cursors, selection, links, search highlights and mouse reports share the same
+logical/visual mapping. Stored and copied text stays in logical order, which can
+differ from its displayed order. Applications that already emit visually reordered
+RTL text will be reordered again. Bidi and case-folding tables follow Unicode 16.
 Terminal applications can write supported text to the clipboard; clipboard reads
 remain denied.
 
