@@ -1,6 +1,30 @@
 use super::*;
 
 #[test]
+fn mouse_cleanup_releases_original_tabs_and_all_buttons_even_after_errors() {
+    let buttons = vec![
+        (7, MouseButton::Left),
+        (9, MouseButton::Right),
+        (7, MouseButton::Middle),
+        (9, MouseButton::Navigate(NavigationDirection::Back)),
+        (9, MouseButton::Navigate(NavigationDirection::Forward)),
+    ];
+    let mut pending = buttons.clone();
+    let mut released = Vec::new();
+    let result = release_mouse_buttons(std::mem::take(&mut pending), |id, button| {
+        released.push((id, button));
+        if button == MouseButton::Right {
+            anyhow::bail!("write failed");
+        }
+        Ok(())
+    });
+    assert_eq!(released, buttons);
+    assert!(pending.is_empty());
+    assert_eq!(result.unwrap_err().to_string(), "write failed");
+    release_mouse_buttons(pending, |_, _| panic!("duplicate release")).unwrap();
+}
+
+#[test]
 fn native_progress_follows_live_active_tab_and_validates_percent() {
     let mut tabs = vec![
         TabInfo {

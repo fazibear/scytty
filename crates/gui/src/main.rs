@@ -741,6 +741,20 @@ impl Gui {
         }
         Ok(())
     }
+    fn release_mouse(&mut self, position: gpui::Point<Pixels>) -> Result<()> {
+        self.end_mouse_drag();
+        self.link_press = None;
+        let buttons = std::mem::take(&mut self.reported_mouse_buttons);
+        release_mouse_buttons(buttons, |id, button| {
+            self.report_mouse(
+                id,
+                ghostty_vt::mouse::Action::Release,
+                Some(button),
+                position,
+                Modifiers::default(),
+            )
+        })
+    }
     fn link_at(&self, position: gpui::Point<Pixels>) -> Result<Option<String>> {
         if !self.bounds.contains(&position)
             || position.x >= self.bounds.right() - px(scrollbar::WIDTH)
@@ -1273,6 +1287,18 @@ impl Gui {
         Ok(())
     }
 }
+fn release_mouse_buttons(
+    buttons: Vec<(u64, MouseButton)>,
+    mut release: impl FnMut(u64, MouseButton) -> Result<()>,
+) -> Result<()> {
+    let mut result = Ok(());
+    for (id, button) in buttons {
+        let released = release(id, button);
+        result = result.and(released);
+    }
+    result
+}
+
 impl Render for Gui {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.window_bounds = Some(window.window_bounds());
@@ -1309,27 +1335,14 @@ impl Render for Gui {
                 self.error = Some(format!("{e:#}"));
             }
         }
-        if let Some(retry) = &self.reconnect {
-            root = root.child(
-                div()
-                    .flex_shrink_0()
-                    .px(px(8.))
-                    .py(px(4.))
-                    .bg(rgb(0x38204f))
-                    .child(format!(
-                        "Reconnecting to {}… (attempt {}) — input paused",
-                        self.host.as_deref().unwrap_or("local server"),
-                        retry.attempts
-                    )),
-            );
-        }
         let menu = self.plus_menu(window, cx);
         if let Some(error) = self.error.clone().or_else(|| {
-            (self.connecting && self.reconnect.is_none()).then(|| {
-                format!(
-                    "Connecting to {}…",
-                    self.host.as_deref().unwrap_or("local server")
-                )
+            self.connecting.then(|| {
+                let host = self.host.as_deref().unwrap_or("local server");
+                match &self.reconnect {
+                    Some(retry) => format!("Reconnecting to {host}… (attempt {})", retry.attempts),
+                    None => format!("Connecting to {host}…"),
+                }
             })
         }) {
             return root
@@ -1681,7 +1694,9 @@ fn open_window(
                     view.update_native_progress(window, true, cx);
                     Ok(())
                 } else {
-                    view.release_keys()
+                    let mouse = view.release_mouse(window.mouse_position());
+                    let keys = view.release_keys();
+                    mouse.and(keys)
                 }
                 .and_then(|()| view.report_focus(focused));
                 view.report(result, cx);
