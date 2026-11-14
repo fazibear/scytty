@@ -464,11 +464,7 @@ impl Gui {
                             tab.exited = info.exited;
                         }
                     }
-                    let title = tabs
-                        .iter()
-                        .enumerate()
-                        .find(|(_, t)| t.id == active)
-                        .map_or_else(|| "scytty".into(), |(i, t)| tab_title(i, t));
+                    let title = active_tab_title(&tabs, active);
                     match self
                         .config
                         .window_title(&self.session, &title, self.host.is_some())
@@ -1133,10 +1129,10 @@ impl Gui {
             }
             let search = tab.search.as_mut().unwrap();
             let running = find::advance(search, &tab.terminal, &find.query)?;
-            if !running && search.selected_index()?.is_none() && search.total_matches()? > 0 {
+            if !running && search.selected_index().is_none() && search.total_matches() > 0 {
                 search.select_next(&mut tab.terminal)?;
             }
-            let stats = (search.total_matches()?, search.selected_index()?, running);
+            let stats = (search.total_matches(), search.selected_index(), running);
             if find.stats != stats {
                 find.stats = stats;
                 cx.notify();
@@ -1426,14 +1422,13 @@ impl EntityInputHandler for Gui {
         _: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<String> {
-        if let Some(find) = &self.find {
-            let range = find.byte_range(range);
-            *actual = Some(find.utf16_range(range.clone()));
-            return Some(find.query[range].to_owned());
-        }
-        let range = unicode::byte_range(&self.marked, range);
-        *actual = Some(unicode::utf16_range(&self.marked, range.clone()));
-        Some(self.marked[range].to_owned())
+        let text = self
+            .find
+            .as_ref()
+            .map_or(self.marked.as_str(), |find| find.query.as_str());
+        let range = unicode::byte_range(text, range);
+        *actual = Some(unicode::utf16_range(text, range.clone()));
+        Some(text[range].to_owned())
     }
     fn selected_text_range(
         &mut self,
@@ -1444,14 +1439,17 @@ impl EntityInputHandler for Gui {
         Some(UTF16Selection {
             range: self.find.as_ref().map_or_else(
                 || self.marked_selection.clone(),
-                |f| f.utf16_range(f.selection.clone()),
+                |f| unicode::utf16_range(&f.query, f.selection.clone()),
             ),
             reversed: self.find.as_ref().is_some_and(|f| f.reversed),
         })
     }
     fn marked_text_range(&self, _: &mut Window, _: &mut Context<Self>) -> Option<Range<usize>> {
         if let Some(find) = &self.find {
-            return find.marked.clone().map(|r| find.utf16_range(r));
+            return find
+                .marked
+                .clone()
+                .map(|r| unicode::utf16_range(&find.query, r));
         }
         (!self.marked.is_empty()).then(|| 0..self.marked.encode_utf16().count())
     }
@@ -1494,12 +1492,9 @@ impl EntityInputHandler for Gui {
     ) {
         if let Some(find) = &mut self.find {
             let inserted = find.replace(range, text);
-            let start = find.utf16_range(inserted.clone()).start;
             if let Some(selected) = selected {
-                let text = &find.query[inserted.clone()];
-                let selected = unicode::utf16_range(text, unicode::byte_range(text, selected));
-                find.selection = find.byte_range(start + selected.start..start + selected.end);
-                find.reversed = false;
+                let selected = unicode::byte_range(&find.query[inserted.clone()], selected);
+                find.selection = inserted.start + selected.start..inserted.start + selected.end;
             }
             find.marked = Some(inserted);
             cx.notify();
@@ -1623,6 +1618,12 @@ fn selection_point(
             .floor()
             .clamp(0., f32::from(rows.saturating_sub(1))) as u32,
     })
+}
+fn active_tab_title(tabs: &[TabInfo], active: u64) -> String {
+    tabs.iter()
+        .enumerate()
+        .find(|(_, tab)| tab.id == active)
+        .map_or_else(|| "scytty".into(), |(index, tab)| tab_title(index, tab))
 }
 fn tab_title(index: usize, tab: &TabInfo) -> String {
     if tab.title.is_empty() {

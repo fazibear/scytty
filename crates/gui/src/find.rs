@@ -17,15 +17,9 @@ pub struct Find {
 }
 
 impl Find {
-    pub fn utf16_range(&self, range: Range<usize>) -> Range<usize> {
-        crate::unicode::utf16_range(&self.query, range)
-    }
-    pub fn byte_range(&self, range: Range<usize>) -> Range<usize> {
-        crate::unicode::byte_range(&self.query, range)
-    }
     pub fn replace(&mut self, range: Option<Range<usize>>, text: &str) -> Range<usize> {
         let range = range
-            .map(|r| self.byte_range(r))
+            .map(|r| crate::unicode::byte_range(&self.query, r))
             .or_else(|| self.marked.take())
             .unwrap_or_else(|| self.selection.clone());
         // Keep pasted queries single-line and bound work/memory from external input.
@@ -50,19 +44,19 @@ impl Find {
         } else {
             self.selection.end
         };
-        let previous = self
-            .query
-            .grapheme_indices(true)
-            .take_while(|(i, _)| *i < caret)
-            .last()
-            .map_or(0, |(i, _)| i);
-        let next = self
-            .query
-            .grapheme_indices(true)
-            .find(|(i, _)| *i > caret)
-            .map_or(self.query.len(), |(i, _)| i);
-        let boundary =
-            caret == self.query.len() || self.query.grapheme_indices(true).any(|(i, _)| i == caret);
+        let mut previous = 0;
+        let mut next = self.query.len();
+        let mut boundary = caret == self.query.len();
+        for (index, _) in self.query.grapheme_indices(true) {
+            if index < caret {
+                previous = index;
+            } else if index == caret {
+                boundary = true;
+            } else {
+                next = index;
+                break;
+            }
+        }
         match key {
             "backspace" | "delete" => {
                 if self.selection.is_empty() {
@@ -103,7 +97,7 @@ impl Find {
 }
 
 pub fn advance(search: &mut Search, terminal: &Terminal, query: &str) -> Result<bool> {
-    search.set_needle(terminal, Some(query))?;
+    search.set_needle(terminal, query)?;
     let deadline = Instant::now() + Duration::from_millis(2);
     loop {
         if !search.tick(terminal)? {

@@ -3,12 +3,6 @@ use ghostty_vt::render::CursorVisualStyle;
 use gpui::{
     App, Bounds, ContentMask, Font, Pixels, Point, Size, TextRun, Window, fill, point, px, size,
 };
-use std::time::Duration;
-
-fn visible(blinking: bool, elapsed: Duration) -> bool {
-    !blinking || elapsed.as_millis() % 1000 < 500
-}
-
 fn rectangles(
     style: CursorVisualStyle,
     cell: Size<Pixels>,
@@ -53,7 +47,8 @@ pub(super) fn paint(
         return Ok(());
     };
     let active = window.is_window_active();
-    if active && !visible(state.blinking, tab.cursor_since.elapsed()) {
+    if active && state.blinking && !crate::terminal_paint::blink_visible(tab.cursor_since.elapsed())
+    {
         return Ok(());
     }
     let x =

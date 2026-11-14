@@ -2,6 +2,11 @@ use super::*;
 
 #[test]
 fn paths_are_quoted_for_the_destination_shell() -> Result<()> {
+    assert_eq!(dropped(&[], false, None)?, " ");
+    assert_eq!(
+        dropped(&[Path::new("/tmp/it's;$x.png")], false, None)?,
+        "'/tmp/it'\\''s;$x.png' "
+    );
     let path = Path::new("C:\\Research & Development\\it's (new).txt");
     assert_eq!(
         dropped(&[path], true, Some("cmd.exe"))?,

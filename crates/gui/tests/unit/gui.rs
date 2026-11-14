@@ -140,14 +140,8 @@ fn fractional_trackpad_scroll_accumulates() {
 }
 
 #[test]
-fn paths_icons_and_navigation() -> Result<()> {
-    assert_eq!(
-        paths::dropped(&[std::path::Path::new("/tmp/it's;$x.png")], false, None)?,
-        "'/tmp/it'\\''s;$x.png' "
-    );
-    assert!(expand_nerd_icon("\u{e0b0}", " "));
-    assert!(!expand_nerd_icon("\u{e0b0}", "x"));
-    let tabs: Vec<_> = [4, 8, 12]
+fn tab_navigation_and_titles() {
+    let mut tabs: Vec<_> = [4, 8, 12]
         .into_iter()
         .map(|id| TabInfo {
             id,
@@ -157,5 +151,9 @@ fn paths_icons_and_navigation() -> Result<()> {
     assert_eq!(adjacent_tab(&tabs, 4, -1), Some(12));
     assert_eq!(adjacent_tab(&tabs, 12, 1), Some(4));
     assert_eq!(adjacent_tab(&[], 0, 1), None);
-    Ok(())
+    assert_eq!(active_tab_title(&tabs, 8), "Tab 2");
+    assert_eq!(active_tab_title(&tabs, 99), "scytty");
+    assert_eq!(active_tab_title(&[], 0), "scytty");
+    tabs[1].title = "shell".into();
+    assert_eq!(active_tab_title(&tabs, 8), "shell");
 }

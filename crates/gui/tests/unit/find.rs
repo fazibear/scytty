@@ -4,7 +4,10 @@ use ghostty_vt::{TerminalOptions, terminal::ScrollViewport};
 fn edits_unicode_and_composition_without_splitting_characters() {
     let mut find = Find::default();
     find.replace(None, "a😀é");
-    assert_eq!(find.utf16_range(find.selection.clone()), 4..4);
+    assert_eq!(
+        crate::unicode::utf16_range(&find.query, find.selection.clone()),
+        4..4
+    );
     find.edit("backspace", false);
     assert_eq!(find.query, "a😀");
     find.replace(Some(1..3), "界");
@@ -82,7 +85,7 @@ fn unicode_search_highlights_grapheme_cell_spans_without_normalizing_text() -> R
         ("क्ष", 2),
     ] {
         while advance(&mut search, &terminal, needle)? {}
-        assert_eq!(search.total_matches()?, 1, "{needle:?}");
+        assert_eq!(search.total_matches(), 1, "{needle:?}");
         assert_eq!(
             highlights(&search, &terminal)?
                 .iter()
@@ -105,7 +108,7 @@ fn highlights_wrapped_and_wide_matches() -> Result<()> {
     terminal.vt_write("abcdneedle\r\n界".as_bytes());
     let mut search = Search::new(&terminal)?;
     while advance(&mut search, &terminal, "needle")? {}
-    assert_eq!(search.total_matches()?, 1);
+    assert_eq!(search.total_matches(), 1);
     let rects = highlights(&search, &terminal)?;
     assert_eq!(rects.iter().map(|h| h.width).sum::<usize>(), 6);
     while advance(&mut search, &terminal, "界")? {}
@@ -117,7 +120,7 @@ fn highlights_wrapped_and_wide_matches() -> Result<()> {
         2
     );
     while advance(&mut search, &terminal, "")? {}
-    assert_eq!(search.total_matches()?, 0);
+    assert_eq!(search.total_matches(), 0);
     assert!(highlights(&search, &terminal)?.is_empty());
     Ok(())
 }
@@ -140,7 +143,7 @@ fn full_case_folding_maps_expansions_back_to_original_cells() -> Result<()> {
         terminal.vt_write(text.as_bytes());
         let mut search = Search::new(&terminal)?;
         while advance(&mut search, &terminal, needle)? {}
-        assert_eq!(search.total_matches()?, count, "{text:?} / {needle:?}");
+        assert_eq!(search.total_matches(), count, "{text:?} / {needle:?}");
     }
     let mut terminal = Terminal::new(TerminalOptions {
         cols: 4,
@@ -150,7 +153,7 @@ fn full_case_folding_maps_expansions_back_to_original_cells() -> Result<()> {
     terminal.vt_write("Straße".as_bytes());
     let mut search = Search::new(&terminal)?;
     while advance(&mut search, &terminal, "STRASSE")? {}
-    assert_eq!(search.total_matches()?, 1);
+    assert_eq!(search.total_matches(), 1);
     assert_eq!(
         highlights(&search, &terminal)?
             .iter()
@@ -171,7 +174,7 @@ fn searches_scrollback_navigates_and_highlights_without_changing_selection() -> 
     terminal.vt_write(b"Needle\r\na\r\nb\r\nc\r\nneedle\r\nend");
     let mut search = Search::new(&terminal)?;
     while advance(&mut search, &terminal, "needle")? {}
-    assert_eq!(search.total_matches()?, 2);
+    assert_eq!(search.total_matches(), 2);
     assert!(search.select_next(&mut terminal)?);
     assert!(!highlights(&search, &terminal)?.is_empty());
     assert!(search.select_next(&mut terminal)?);
@@ -182,8 +185,8 @@ fn searches_scrollback_navigates_and_highlights_without_changing_selection() -> 
     terminal.vt_write(b"\r\nNEEDLE");
     search.feed(&terminal)?;
     while advance(&mut search, &terminal, "needle")? {}
-    assert_eq!(search.total_matches()?, 3);
+    assert_eq!(search.total_matches(), 3);
     while advance(&mut search, &terminal, "missing")? {}
-    assert_eq!(search.total_matches()?, 0);
+    assert_eq!(search.total_matches(), 0);
     Ok(())
 }

@@ -17,7 +17,7 @@ fn live_output_keeps_history_progress_and_updates_active_matches() -> Result<()>
         terminal.vt_write(b"needle\r\n");
     }
     let mut search = Search::new(&terminal)?;
-    search.set_needle(&terminal, Some("needle"))?;
+    search.set_needle(&terminal, "needle")?;
     for _ in 0..10 {
         assert!(search.tick(&terminal)?);
     }
@@ -27,18 +27,18 @@ fn live_output_keeps_history_progress_and_updates_active_matches() -> Result<()>
     assert!(!search.dirty);
     assert_eq!(search.row, progress);
     complete(&mut search, &terminal)?;
-    assert_eq!(search.total_matches()?, 101);
+    assert_eq!(search.total_matches(), 101);
     search.select_prev(&mut terminal)?;
-    let selected = search.selected_index()?;
+    let selected = search.selected_index();
     terminal.vt_write(b"\r\nneedle");
     search.feed(&terminal)?;
     complete(&mut search, &terminal)?;
-    assert_eq!(search.total_matches()?, 102);
-    assert_eq!(search.selected_index()?, selected);
+    assert_eq!(search.total_matches(), 102);
+    assert_eq!(search.selected_index(), selected);
     terminal.vt_write(b"\x1b[2J\x1b[Hgone");
     search.feed(&terminal)?;
     complete(&mut search, &terminal)?;
-    assert!(search.total_matches()? < 102);
+    assert!(search.total_matches() < 102);
     Ok(())
 }
 
@@ -51,15 +51,15 @@ fn selected_match_survives_live_updates_without_scrollback() -> Result<()> {
     })?;
     terminal.vt_write(b"needle needle needle");
     let mut search = Search::new(&terminal)?;
-    search.set_needle(&terminal, Some("needle"))?;
+    search.set_needle(&terminal, "needle")?;
     complete(&mut search, &terminal)?;
     search.select_prev(&mut terminal)?;
-    assert_eq!(search.selected_index()?, Some(2));
+    assert_eq!(search.selected_index(), Some(2));
     terminal.vt_write(b"\r\nneedle");
     search.feed(&terminal)?;
     complete(&mut search, &terminal)?;
-    assert_eq!(search.total_matches()?, 4);
-    assert_eq!(search.selected_index()?, Some(2));
+    assert_eq!(search.total_matches(), 4);
+    assert_eq!(search.selected_index(), Some(2));
     Ok(())
 }
 
@@ -72,14 +72,14 @@ fn wrapped_matches_can_overlap_and_reindex_only_bounded_context() -> Result<()> 
     })?;
     terminal.vt_write(b"aaaaaaaaaaaaaaaaaaaa");
     let mut search = Search::new(&terminal)?;
-    search.set_needle(&terminal, Some("aaa"))?;
+    search.set_needle(&terminal, "aaa")?;
     complete(&mut search, &terminal)?;
-    assert_eq!(search.total_matches()?, 18);
+    assert_eq!(search.total_matches(), 18);
     terminal.vt_write(b"aaaa");
     search.feed(&terminal)?;
     assert!(search.row > 0);
     complete(&mut search, &terminal)?;
-    assert_eq!(search.total_matches()?, 22);
+    assert_eq!(search.total_matches(), 22);
     assert!(search.text.len() < search.folded.len());
     Ok(())
 }
@@ -109,10 +109,10 @@ fn ascii_search_keeps_native_space_wrap_and_overlap_semantics() -> Result<()> {
         native.set_needle(&terminal, Some(query))?;
         native.run(&terminal)?;
         let mut search = Search::new(&terminal)?;
-        search.set_needle(&terminal, Some(query))?;
+        search.set_needle(&terminal, query)?;
         complete(&mut search, &terminal)?;
         assert_eq!(
-            search.total_matches()?,
+            search.total_matches(),
             native.total_matches()?,
             "{text:?} / {query:?}"
         );
@@ -131,23 +131,23 @@ fn resize_screen_switch_and_history_eviction_discard_stale_coordinates() -> Resu
         terminal.vt_write("Straße\r\n".as_bytes());
     }
     let mut search = Search::new(&terminal)?;
-    search.set_needle(&terminal, Some("strasse"))?;
+    search.set_needle(&terminal, "strasse")?;
     complete(&mut search, &terminal)?;
-    assert_eq!(search.total_matches()?, 40);
+    assert_eq!(search.total_matches(), 40);
     search.select_prev(&mut terminal)?;
     terminal.resize(4, 3, 8, 16)?;
     search.feed(&terminal)?;
     assert!(search.dirty);
     complete(&mut search, &terminal)?;
-    assert_eq!(search.total_matches()?, 40);
-    assert_eq!(search.selected_index()?, Some(39));
+    assert_eq!(search.total_matches(), 40);
+    assert_eq!(search.selected_index(), Some(39));
     terminal.vt_write(b"\x1b[?1049hclean");
     search.feed(&terminal)?;
     complete(&mut search, &terminal)?;
-    assert_eq!(search.total_matches()?, 0);
+    assert_eq!(search.total_matches(), 0);
     terminal.vt_write(b"\x1b[?1049l\x1b[3J");
     search.feed(&terminal)?;
     complete(&mut search, &terminal)?;
-    assert!(search.total_matches()? < 40);
+    assert!(search.total_matches() < 40);
     Ok(())
 }

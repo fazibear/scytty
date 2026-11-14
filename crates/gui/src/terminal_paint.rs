@@ -27,7 +27,7 @@ struct Text {
     blink: bool,
 }
 
-fn blink_visible(elapsed: Duration) -> bool {
+pub(super) fn blink_visible(elapsed: Duration) -> bool {
     elapsed.as_millis() % 1000 < 500
 }
 

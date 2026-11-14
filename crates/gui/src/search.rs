@@ -49,8 +49,7 @@ impl Search {
         search.feed(terminal)?;
         Ok(search)
     }
-    pub(super) fn set_needle(&mut self, terminal: &Terminal, needle: Option<&str>) -> Result<()> {
-        let needle = needle.unwrap_or_default();
+    pub(super) fn set_needle(&mut self, terminal: &Terminal, needle: &str) -> Result<()> {
         if self.needle != needle {
             self.dirty = true;
             self.wanted = None;
@@ -242,11 +241,11 @@ impl Search {
         self.row += 1;
         Ok(self.row < self.rows)
     }
-    pub(super) fn total_matches(&self) -> Result<usize> {
-        Ok(self.matches.len())
+    pub(super) fn total_matches(&self) -> usize {
+        self.matches.len()
     }
-    pub(super) fn selected_index(&self) -> Result<Option<usize>> {
-        Ok(self.selected)
+    pub(super) fn selected_index(&self) -> Option<usize> {
+        self.selected
     }
     fn selection<'t>(result: Match, terminal: &'t Terminal) -> Result<Selection<'t>> {
         Ok(Selection::new(
@@ -283,21 +282,11 @@ impl Search {
             return Ok(false);
         }
         let count = self.matches.len();
-        let index = match self.selected {
-            None => {
-                if backwards {
-                    count - 1
-                } else {
-                    0
-                }
-            }
-            Some(index) => {
-                if backwards {
-                    (index + count - 1) % count
-                } else {
-                    (index + 1) % count
-                }
-            }
+        let index = match (self.selected, backwards) {
+            (None, false) => 0,
+            (None, true) => count - 1,
+            (Some(index), false) => (index + 1) % count,
+            (Some(index), true) => (index + count - 1) % count,
         };
         self.selected = Some(index);
         self.wanted = None;

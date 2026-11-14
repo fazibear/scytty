@@ -8,18 +8,19 @@ pub fn dropped(paths: &[&Path], windows: bool, bin: Option<&str>) -> Result<Stri
         None
     };
     let bin = bin.or(default_bin.as_deref());
-    paths
-        .iter()
-        .map(|path| {
-            quote(
-                path.to_str()
-                    .context("Dropped file path is not valid UTF-8")?,
-                windows,
-                bin,
-            )
-        })
-        .collect::<Result<Vec<_>>>()
-        .map(|paths| paths.join(" ") + " ")
+    let mut output = String::new();
+    for path in paths {
+        let path = path
+            .to_str()
+            .context("Dropped file path is not valid UTF-8")?;
+        let quoted = quote(path, windows, bin)?;
+        if !output.is_empty() {
+            output.push(' ');
+        }
+        output.push_str(&quoted);
+    }
+    output.push(' ');
+    Ok(output)
 }
 
 fn quote(path: &str, windows: bool, bin: Option<&str>) -> Result<String> {

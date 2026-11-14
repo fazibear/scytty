@@ -75,12 +75,7 @@ impl Gui {
             config::MenuAction::ReloadConfig => {
                 let mut config = Config::load()?;
                 config.font_family = fonts::resolve(&config.font_family)?;
-                let title = self
-                    .order
-                    .iter()
-                    .enumerate()
-                    .find(|(_, tab)| tab.id == self.active)
-                    .map_or_else(|| "scytty".into(), |(index, tab)| tab_title(index, tab));
+                let title = active_tab_title(&self.order, self.active);
                 let title = config.window_title(&self.session, &title, self.host.is_some())?;
                 if config.scrollback_mb != self.config.scrollback_mb {
                     if self.writer.is_some() && !self.connecting {

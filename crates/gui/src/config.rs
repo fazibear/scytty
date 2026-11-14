@@ -202,18 +202,16 @@ impl Config {
                 let Value::Table(entries) = raw else {
                     bail!("plus_menu must be an array")
                 };
-                let count = entries
-                    .clone()
-                    .pairs::<usize, Table>()
-                    .map(|entry| -> Result<usize> {
+                let count = entries.clone().pairs::<usize, Table>().try_fold(
+                    0,
+                    |count, entry| -> Result<usize> {
                         let (index, _) = entry?;
                         if index == 0 || index > entries.raw_len() {
                             bail!("plus_menu must be a contiguous array");
                         }
-                        Ok(index)
-                    })
-                    .collect::<Result<Vec<_>>>()?
-                    .len();
+                        Ok(count + 1)
+                    },
+                )?;
                 if count != entries.raw_len() {
                     bail!("plus_menu must be a contiguous array");
                 }
