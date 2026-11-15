@@ -349,7 +349,7 @@ fn modifier_transitions_and_extended_function_keys() {
     assert_eq!(changes[0].0.key, "control");
     assert_eq!(changes[0].1, key::Action::Press);
     assert!(keyboard.caps_lock);
-    assert!(!keyboard.shift());
+    assert!(!keyboard.modifiers.shift);
     assert!(keyboard.modifiers_changed(&event).is_empty());
     assert_eq!(
         keyboard.modifiers_changed(&ModifiersChangedEvent::default())[0].1,
@@ -469,6 +469,40 @@ fn gpui_named_text_and_kitty_f26_through_f35() -> Result<()> {
 }
 
 #[test]
+fn shifted_text_uses_gpui_consumed_modifiers() -> Result<()> {
+    let mut terminal = Terminal::new(TerminalOptions::default())?;
+    // GPUI supplies shifted punctuation as the key itself, with Shift consumed.
+    for ch in "~!@#$%^&*()_+{}|:\"<>?".chars() {
+        let text = ch.to_string();
+        let stroke = stroke(&text, Some(&text), Modifiers::default());
+        assert!(
+            send(&terminal, &stroke, key::Action::Press)?.is_none(),
+            "{ch} must use native text insertion"
+        );
+    }
+    let upper = stroke(
+        "a",
+        Some("A"),
+        Modifiers {
+            shift: true,
+            ..Default::default()
+        },
+    );
+    assert!(send(&terminal, &upper, key::Action::Press)?.is_none());
+    terminal.vt_write(b"\x1b[>31u");
+    let tilde = stroke("~", Some("~"), Modifiers::default());
+    assert_eq!(
+        send(&terminal, &tilde, key::Action::Press)?.unwrap(),
+        b"\x1b[126;;126u"
+    );
+    assert_eq!(
+        send(&terminal, &tilde, key::Action::Release)?.unwrap(),
+        b"\x1b[126;1:3u"
+    );
+    Ok(())
+}
+
+#[test]
 fn window_modifier_sync_does_not_invent_key_presses() {
     let mut keyboard = Keyboard::default();
     let modifiers = Modifiers {
@@ -476,7 +510,7 @@ fn window_modifier_sync_does_not_invent_key_presses() {
         ..Default::default()
     };
     keyboard.sync(modifiers, true);
-    assert!(keyboard.shift());
+    assert!(keyboard.modifiers.shift);
     assert!(keyboard.caps_lock);
     assert!(
         keyboard
@@ -487,7 +521,7 @@ fn window_modifier_sync_does_not_invent_key_presses() {
             .is_empty()
     );
     assert!(keyboard.clear().is_empty());
-    assert!(!keyboard.shift());
+    assert!(!keyboard.modifiers.shift);
 }
 
 #[test]

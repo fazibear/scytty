@@ -641,9 +641,7 @@ impl Gui {
         Ok(())
     }
     fn encode_key(&mut self, stroke: &Keystroke, action: key::Action) -> Result<Option<()>> {
-        let mut stroke = stroke.clone();
-        stroke.modifiers.shift |= self.keyboard.shift();
-        let stroke = &stroke;
+        // GPUI consumes Shift for punctuation; preserve its logical-key modifiers.
         let id = self.keyboard.target(stroke).unwrap_or(self.active);
         let Some(tab) = self.tabs.get_mut(&id).filter(|tab| !tab.exited) else {
             return Ok(None);
@@ -683,9 +681,7 @@ impl Gui {
     }
     fn key_up(&mut self, event: &KeyUpEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.keyboard.caps_lock = window.capslock().on;
-        let mut released = event.keystroke.clone();
-        released.modifiers.shift |= window.modifiers().shift;
-        if let Some((id, stroke)) = self.keyboard.release(&released) {
+        if let Some((id, stroke)) = self.keyboard.release(&event.keystroke) {
             let result = self.send_key_release(id, &stroke);
             self.report(result, cx);
             cx.stop_propagation();

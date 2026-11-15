@@ -21,10 +21,6 @@ impl Keyboard {
         }
     }
 
-    pub(super) fn shift(&self) -> bool {
-        self.modifiers.shift
-    }
-
     pub(super) fn target(&self, stroke: &Keystroke) -> Option<u64> {
         self.pressed
             .iter()
