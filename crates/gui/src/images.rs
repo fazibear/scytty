@@ -3,30 +3,33 @@ use ghostty_vt::{Terminal, kitty::graphics::ImageFormat, render::ImagePlacement}
 use gpui::{Bounds, ContentMask, Pixels, RenderImage, Window, point, px, size};
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, OnceLock},
+    sync::{Arc, Mutex},
 };
 
-/// Displayed at 240 logical px (ui.rs); 512 covers 2x DPI without the
-/// aliasing GPUI's mipmap-less bilinear atlas filter causes when the GPU
-/// minifies the 1254 px source.
-const ERROR_REAPER_SIZE: u32 = 512;
-
-pub fn error_reaper() -> Arc<RenderImage> {
-    static IMAGE: OnceLock<Arc<RenderImage>> = OnceLock::new();
-    IMAGE
-        .get_or_init(|| {
-            render_image(
-                image::load_from_memory(include_bytes!("../../../assets/error-reaper.png"))
-                    .expect("bundled error reaper is a valid PNG")
-                    .resize_exact(
-                        ERROR_REAPER_SIZE,
-                        ERROR_REAPER_SIZE,
-                        image::imageops::FilterType::Lanczos3,
-                    )
-                    .into_rgba8(),
+pub fn error_reaper(physical_size: u32) -> Arc<RenderImage> {
+    static IMAGES: Mutex<Vec<(u32, Arc<RenderImage>)>> = Mutex::new(Vec::new());
+    let physical_size = physical_size.max(1);
+    let mut cached = IMAGES.lock().expect("error image cache lock");
+    if let Some((_, image)) = cached.iter().find(|(size, _)| *size == physical_size) {
+        return image.clone();
+    }
+    // Prefilter at the final DPI-adjusted size instead of minifying in GPUI's atlas.
+    let image = render_image(
+        image::load_from_memory(include_bytes!("../../../assets/error-reaper.png"))
+            .expect("bundled error reaper is a valid PNG")
+            .resize_exact(
+                physical_size,
+                physical_size,
+                image::imageops::FilterType::Lanczos3,
             )
-        })
-        .clone()
+            .into_rgba8(),
+    );
+    // Bound resize variants while retaining sizes used by mixed-DPI windows.
+    if cached.len() == 4 {
+        cached.remove(0);
+    }
+    cached.push((physical_size, image.clone()));
+    image
 }
 
 #[derive(Default)]

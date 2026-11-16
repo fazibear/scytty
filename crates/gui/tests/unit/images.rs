@@ -2,7 +2,19 @@ use super::*;
 use crate::tests::roundtrip;
 #[test]
 fn bundled_error_reaper_loads_and_is_cached() {
-    assert!(Arc::ptr_eq(&error_reaper(), &error_reaper()));
+    // 240 logical pixels at 100%, 125%, 150%, 200%, and 300% display scaling.
+    for pixels in [240, 300, 360, 480, 720] {
+        let image = error_reaper(pixels);
+        assert_eq!(
+            image.as_bytes(0).unwrap().len(),
+            pixels as usize * pixels as usize * 4
+        );
+        assert!(Arc::ptr_eq(&image, &error_reaper(pixels)));
+    }
+    let image = error_reaper(240);
+    let _ = error_reaper(300);
+    assert!(Arc::ptr_eq(&image, &error_reaper(240)));
+    assert_eq!(error_reaper(0).as_bytes(0).unwrap().len(), 4);
     let rgba = image::RgbaImage::from_raw(1, 1, vec![10, 20, 30, 40]).unwrap();
     assert_eq!(
         render_image(rgba).as_bytes(0),

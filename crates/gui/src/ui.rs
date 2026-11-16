@@ -372,6 +372,10 @@ impl Gui {
     ) -> Stateful<Div> {
         let bubble_width = (window.viewport_size().width - px(48.)).clamp(px(41.), px(640.));
         let text_width = bubble_width - px(40.);
+        let image_width = (window.viewport_size().width - px(48.)).clamp(px(1.), px(240.));
+        let image_pixels = (f32::from(image_width) * window.scale_factor())
+            .round()
+            .max(1.) as u32;
         let mut wrapper = window
             .text_system()
             .line_wrapper(font(self.config.font_family.clone()).bold(), px(16.));
@@ -477,7 +481,7 @@ impl Gui {
                         .flex_shrink_0(),
                     )
                     .child(
-                        img(images::error_reaper())
+                        img(images::error_reaper(image_pixels))
                             .size(px(240.))
                             .max_w(relative(1.))
                             .flex_shrink_0()
