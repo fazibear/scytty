@@ -6,6 +6,11 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
+/// Displayed at 240 logical px (ui.rs); 512 covers 2x DPI without the
+/// aliasing GPUI's mipmap-less bilinear atlas filter causes when the GPU
+/// minifies the 1254 px source.
+const ERROR_REAPER_SIZE: u32 = 512;
+
 pub fn error_reaper() -> Arc<RenderImage> {
     static IMAGE: OnceLock<Arc<RenderImage>> = OnceLock::new();
     IMAGE
@@ -13,6 +18,11 @@ pub fn error_reaper() -> Arc<RenderImage> {
             render_image(
                 image::load_from_memory(include_bytes!("../../../assets/error-reaper.png"))
                     .expect("bundled error reaper is a valid PNG")
+                    .resize_exact(
+                        ERROR_REAPER_SIZE,
+                        ERROR_REAPER_SIZE,
+                        image::imageops::FilterType::Lanczos3,
+                    )
                     .into_rgba8(),
             )
         })
