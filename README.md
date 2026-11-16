@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.png" width="320" alt="scytty hooded reaper and terminal logo">
+  <img src="assets/transparent.png" width="320" alt="scytty hooded reaper and terminal logo">
 </p>
 
 # scytty
