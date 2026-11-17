@@ -27,18 +27,6 @@ pub fn configure_notification(notification: &mut notify_rust::Notification) {
     notification.body(&body);
 }
 
-pub fn command_modifier(modifiers: Modifiers) -> bool {
-    modifiers.control
-}
-
-pub fn clipboard_modifier(modifiers: Modifiers) -> bool {
-    command_modifier(modifiers) && modifiers.shift
-}
-
-pub fn zoom_modifier(modifiers: Modifiers) -> bool {
-    !modifiers.alt && modifiers.control
-}
-
 pub fn titlebar() -> Stateful<Div> {
     super::titlebar_base().on_mouse_down(MouseButton::Left, |event, window, _| {
         if event.click_count == 2 {

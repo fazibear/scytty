@@ -25,7 +25,9 @@ mod cursor;
 mod find;
 mod fonts;
 mod images;
+mod key_bindings;
 mod keyboard;
+use key_bindings::Action as KeyAction;
 mod links;
 mod notifications;
 mod paths;
@@ -509,18 +511,10 @@ impl Gui {
             return;
         }
         let m = stroke.modifiers;
-        if platform::clipboard_modifier(m) && stroke.key == "f" {
-            let find = self.find.get_or_insert_with(Default::default);
-            find.selection = 0..find.query.len();
-            find.reversed = false;
-            self.marked.clear();
-            self.marked_selection = 0..0;
-            self.focus.focus(window);
-            cx.stop_propagation();
-            cx.notify();
-            return;
-        }
-        if let Some(find) = &mut self.find {
+        let actions = self.config.key_actions(stroke);
+        if let Some(find) = &mut self.find
+            && !actions.contains(&KeyAction::Find)
+        {
             let handled = match stroke.key.as_str() {
                 "escape" => {
                     self.find = None;
@@ -539,13 +533,13 @@ impl Gui {
                     find.reversed = false;
                     true
                 }
-                "c" if platform::clipboard_modifier(m) => {
+                "c" if platform::command_modifier(m) => {
                     cx.write_to_clipboard(ClipboardItem::new_string(
                         find.query[find.selection.clone()].to_owned(),
                     ));
                     true
                 }
-                "v" if platform::clipboard_modifier(m) => {
+                "v" if platform::command_modifier(m) => {
                     if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
                         find.replace(None, &text);
                     }
@@ -559,51 +553,10 @@ impl Gui {
             }
             return;
         }
-        let command = platform::command_modifier(m);
-        let result = if let Some(size) =
-            zoomed_font_size(self.config.font_size, self.initial_font_size, stroke)
-        {
-            self.config.font_size = size;
-            Some(Ok(()))
-        } else if command && stroke.key == "t" {
-            Some(self.request(Request::NewTab))
-        } else if platform::clipboard_modifier(m) && matches!(stroke.key.as_str(), "up" | "down") {
-            Some((|| -> Result<()> {
-                if let Some(tab) = self.tabs.get_mut(&self.active)
-                    && let Some(row) = semantic::prompt_row(&tab.terminal, stroke.key == "up")?
-                {
-                    tab.terminal.scroll_viewport(ScrollViewport::Row(row));
-                    self.scrollbar_last_used = Instant::now();
-                }
-                Ok(())
-            })())
-        } else if command && matches!(stroke.key.as_str(), "left" | "right") {
-            adjacent_tab(
-                &self.order,
-                self.active,
-                if stroke.key == "left" { -1 } else { 1 },
-            )
-            .map(|id| self.request(Request::Activate { id }))
-        } else if platform::clipboard_modifier(m) && stroke.key == "c" {
-            let result = self
-                .tabs
-                .get(&self.active)
-                .map(|tab| selected_text(&tab.terminal))
-                .transpose()
-                .map(|text| {
-                    if let Some(Some(text)) = text {
-                        cx.write_to_clipboard(ClipboardItem::new_string(text));
-                    }
-                });
-            Some(result)
-        } else if platform::clipboard_modifier(m) && stroke.key == "v" {
-            Some(
-                if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-                    self.paste(&text)
-                } else {
-                    Ok(())
-                },
-            )
+        let result = if !actions.is_empty() {
+            Some(key_bindings::run_actions(&actions, |action| {
+                self.run_key_action(action, window, cx)
+            }))
         } else {
             self.encode_key(
                 stroke,
@@ -620,6 +573,74 @@ impl Gui {
             self.report(result, cx);
         }
         self.focus.focus(window);
+    }
+    fn run_key_action(
+        &mut self,
+        action: KeyAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<()> {
+        match action {
+            KeyAction::NewTab => self.menu_action(&config::MenuAction::NewTab, window, cx),
+            KeyAction::NewWindow => self.menu_action(&config::MenuAction::NewWindow, window, cx),
+            KeyAction::ReloadConfig => {
+                self.menu_action(&config::MenuAction::ReloadConfig, window, cx)
+            }
+            KeyAction::CloseTab => self.request(Request::CloseTab { id: self.active }),
+            KeyAction::PreviousTab | KeyAction::NextTab => {
+                if let Some(id) = adjacent_tab(
+                    &self.order,
+                    self.active,
+                    if action == KeyAction::PreviousTab {
+                        -1
+                    } else {
+                        1
+                    },
+                ) {
+                    self.request(Request::Activate { id })?;
+                }
+                Ok(())
+            }
+            KeyAction::PreviousPrompt | KeyAction::NextPrompt => {
+                if let Some(tab) = self.tabs.get_mut(&self.active)
+                    && let Some(row) =
+                        semantic::prompt_row(&tab.terminal, action == KeyAction::PreviousPrompt)?
+                {
+                    tab.terminal.scroll_viewport(ScrollViewport::Row(row));
+                    self.scrollbar_last_used = Instant::now();
+                }
+                Ok(())
+            }
+            KeyAction::Copy => {
+                if let Some(tab) = self.tabs.get(&self.active)
+                    && let Some(text) = selected_text(&tab.terminal)?
+                {
+                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                }
+                Ok(())
+            }
+            KeyAction::Paste => {
+                if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+                    self.paste(&text)?;
+                }
+                Ok(())
+            }
+            KeyAction::ZoomIn | KeyAction::ZoomOut | KeyAction::ResetZoom => {
+                self.config.font_size = action
+                    .font_size(self.config.font_size, self.initial_font_size)
+                    .unwrap();
+                Ok(())
+            }
+            KeyAction::Find => {
+                let find = self.find.get_or_insert_with(Default::default);
+                find.selection = 0..find.query.len();
+                find.reversed = false;
+                self.marked.clear();
+                self.marked_selection = 0..0;
+                self.focus.focus(window);
+                Ok(())
+            }
+        }
     }
     fn find_step(&mut self, previous: bool) -> Result<()> {
         let Some(find) = &self.find else {
@@ -1535,20 +1556,6 @@ impl Drop for Gui {
         }
         self.disconnect();
     }
-}
-
-fn zoomed_font_size(current: f32, initial: f32, stroke: &Keystroke) -> Option<f32> {
-    let mods = stroke.modifiers;
-    if !platform::zoom_modifier(mods) {
-        return None;
-    }
-    let step = match stroke.key.as_str() {
-        "0" => return Some(initial),
-        "+" | "=" => 1.,
-        "-" | "_" => -1.,
-        _ => return None,
-    };
-    Some((current + step).clamp(6., 96.))
 }
 
 fn scroll_rows(remainder: &mut f32, delta: f32) -> isize {

@@ -192,18 +192,6 @@ fn allow_foreground_notifications() -> Result<()> {
 
 pub fn configure_notification(_: &mut notify_rust::Notification) {}
 
-pub fn command_modifier(modifiers: Modifiers) -> bool {
-    modifiers.platform
-}
-
-pub fn clipboard_modifier(modifiers: Modifiers) -> bool {
-    command_modifier(modifiers)
-}
-
-pub fn zoom_modifier(modifiers: Modifiers) -> bool {
-    !modifiers.alt && (modifiers.control || modifiers.platform)
-}
-
 pub fn titlebar() -> Stateful<Div> {
     super::titlebar_base().pl(px(78.)).pr(px(8.)).on_mouse_down(
         MouseButton::Left,

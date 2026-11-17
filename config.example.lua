@@ -9,6 +9,14 @@ return {
   window_width = 960,
   window_height = 640,
 
+  -- Overrides default shortcuts; empty actions pass the key to the terminal.
+  -- key.SUPER = Cmd on macOS, Windows/Super elsewhere. Apply with Reload config.
+  key_bindings = {
+    -- { keys = {key.SUPER, key.SHIFT, key.N}, actions = {"new_window"} },
+    -- { keys = {key.SUPER, key.T}, actions = {} },
+    -- { keys = {key.SUPER, key.R}, actions = {"reload_config"} },
+  },
+
   format_window_title = function(ctx)
     return ctx.session .. " - " .. ctx.title
   end,

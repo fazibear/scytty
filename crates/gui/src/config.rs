@@ -22,6 +22,7 @@ pub struct MenuEntry {
 #[derive(Debug)]
 pub struct Config {
     pub plus_menu: Vec<MenuEntry>,
+    pub key_bindings: Vec<crate::key_bindings::Binding>,
     pub font_size: f32,
     pub default_cursor_style: ghostty_vt::terminal::CursorStyle,
     pub scrollback_mb: u16,
@@ -55,6 +56,7 @@ impl Default for Config {
                     action: MenuAction::ReloadConfig,
                 },
             ],
+            key_bindings: Vec::new(),
             font_size: 16.0,
             default_cursor_style: ghostty_vt::terminal::CursorStyle::Block,
             scrollback_mb: 16,
@@ -85,6 +87,16 @@ impl Config {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(e) => Err(e).with_context(|| format!("cannot read {}", path.display())),
         }
+    }
+    pub fn key_actions(&self, stroke: &gpui::Keystroke) -> Vec<crate::key_bindings::Action> {
+        if let Some(binding) = self.key_bindings.iter().find(|binding| {
+            binding.keys.key == stroke.key && binding.keys.modifiers == stroke.modifiers
+        }) {
+            return binding.actions.clone();
+        }
+        crate::key_bindings::default_action(stroke)
+            .into_iter()
+            .collect()
     }
     pub fn window_title(&self, session: &str, title: &str, remote: bool) -> Result<String> {
         let ctx = self.lua.create_table()?;
@@ -178,6 +190,7 @@ impl Config {
     }
     fn parse_at(source: &str, directory: Option<&std::path::Path>) -> Result<Self> {
         let lua = Lua::new();
+        crate::key_bindings::install(&lua)?;
         if let Some(directory) = directory {
             let directory = directory
                 .to_str()
@@ -197,6 +210,10 @@ impl Config {
         };
         for pair in table.pairs::<String, Value>() {
             let (key, raw) = pair?;
+            if key == "key_bindings" {
+                config.key_bindings = crate::key_bindings::parse(raw)?;
+                continue;
+            }
             if key == "plus_menu" {
                 let Value::Table(entries) = raw else {
                     bail!("plus_menu must be an array")

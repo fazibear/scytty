@@ -6,6 +6,10 @@ use gpui::{prelude::*, *};
 mod current;
 pub use current::*;
 
+pub fn command_modifier(modifiers: Modifiers) -> bool {
+    modifiers.platform
+}
+
 pub fn paint_scrollbar(
     window: &mut Window,
     track: Bounds<Pixels>,

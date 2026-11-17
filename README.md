@@ -139,7 +139,7 @@ Restart the GUI to reload. Only load trusted config: this is executable Lua.
 Customize the native window title with `format_window_title = function(ctx)
 return ctx.session .. " - " .. ctx.title end`. It receives `session`, the active
 tab's `title`, and `remote` (boolean), and must return a string.
-Server settings and custom keybindings are not configurable yet.
+Server settings are not configurable yet.
 
 Modules beside `config.lua` work with `require()`, including `module/init.lua`.
 For example, `config.format_tab = require("format-tab-title")` loads
@@ -238,9 +238,52 @@ OSC 9;4 progress updates are triggered automatically.
 This changes tab metadata on the wire: update both GUI and server and restart
 the daemon when safe (restarting ends existing sessions).
 
+## Configurable shortcuts
+
+Add `key_bindings` to `config.lua`, then use **Reload config**:
+
+```lua
+key_bindings = {
+  { keys = {key.SUPER, key.SHIFT, key.N}, actions = {"new_window"} },
+  { keys = {key.SUPER, key.T}, actions = {} }, -- Pass through to the terminal.
+  { keys = {key.SUPER, key.R}, actions = {"reload_config"} },
+}
+```
+
+Entries override the defaults; omitted shortcuts keep their existing behavior.
+Scytty supplies the Lua `key` namespace. Modifiers are `key.SUPER`, `key.CTRL`,
+`key.ALT`, `key.SHIFT`, and `key.FN`. Super means Command on macOS and Windows/Super
+elsewhere, not Ctrl. Keys include `key.A`–`key.Z`, `key.DIGIT0`–`key.DIGIT9`,
+`key.F1`–`key.F35`, `key.UP`/`DOWN`/`LEFT`/`RIGHT`, `key.PAGE_UP`/`PAGE_DOWN`,
+`key.HOME`, `key.END`, `key.ENTER`, `key.ESCAPE`, `key.TAB`, `key.SPACE`,
+`key.BACKSPACE`, `key.DELETE`, `key.INSERT`, and punctuation such as `key.PLUS`,
+`key.MINUS`, `key.EQUAL`, `key.SLASH`, and `key.BACKSLASH`.
+Use exactly one non-modifier key per chord. For shifted punctuation, use the
+printed key (e.g. `{key.SUPER, key.PLUS}`), not a guessed physical key or an extra
+consumed Shift modifier. Custom bindings match exact modifiers and ignore the
+generated text. Key sequences and modifier-only bindings are not supported.
+
+Actions: `new_tab`, `new_window`, `close_tab`, `reload_config`, `copy`, `paste`,
+`find`, `previous_tab`, `next_tab`, `previous_prompt`, `next_prompt`, `zoom_in`,
+`zoom_out`, `reset_zoom`. Actions run in order, stopping at the first error;
+completed actions are not rolled back. Server requests are queued, not awaited:
+`new_tab` followed by `paste` may still paste into the current tab.
+`close_tab` ends the tab's shell/processes. Empty `actions = {}` bypasses the
+default action and uses the terminal's normal keyboard encoder. Duplicate chords,
+unknown key constants, and malformed arrays reject the config; a failed reload
+keeps the current configuration.
+
+Bindings apply to the terminal view. The open menu and search editor retain their
+own navigation/editing keys; the configured `find` shortcut can select the current
+search query again.
+
 ## Default shortcuts
 
-- **Cmd+F** on macOS, **Ctrl+Shift+F** elsewhere: search the active tab's buffer,
+All platforms use **Super** (Command on macOS, Windows/Super elsewhere).
+Ctrl shortcuts are left to terminal applications unless explicitly configured.
+The OS or window manager may intercept some Super combinations before Scytty receives them.
+
+- **Super+F**: search the active tab's buffer,
   including scrollback. **Enter / Shift+Enter** moves to the next/previous match;
   **Escape** closes search. Matching is literal with full, locale-independent Unicode
   case folding (`Straße` matches `STRASSE`, and `Σ`, `σ`, `ς` match). Matches map
@@ -248,18 +291,18 @@ the daemon when safe (restarting ends existing sessions).
   is applied. Search runs locally, including for SSH sessions,
   and leaves the terminal's text selection intact.
 
-- **Ctrl+Plus / Ctrl+Minus** (also Cmd on macOS): increase/decrease font size
-- **Ctrl+0** (also Cmd+0 on macOS): reset to the configured font size
+- **Super+Plus / Super+Minus**: increase/decrease font size
+- **Super+0**: reset to the configured font size
 - **Drag**: select terminal text
-- **Cmd+Up / Cmd+Down** on macOS, **Ctrl+Shift+Up / Ctrl+Shift+Down** elsewhere:
+- **Super+Up / Super+Down**:
   jump to the previous/next shell prompt (OSC 133)
-- **Cmd+Shift+Click** on macOS, **Ctrl+Shift+Click** elsewhere:
+- **Super+Shift+Click**:
   select the clicked command's output (OSC 133)
 - **Scrollbar**: drag the right-hand thumb or click its track to navigate scrollback
-- **Cmd+C / Cmd+V** on macOS, **Ctrl+Shift+C / Ctrl+Shift+V** elsewhere:
+- **Super+C / Super+V**:
   copy selection / paste clipboard (including over SSH)
-- **Cmd+T** (Ctrl+T elsewhere): new tab
-- **Cmd+Left / Cmd+Right** (Ctrl+Left / Ctrl+Right elsewhere): previous/next tab, wrapping at the ends
+- **Super+T**: new tab
+- **Super+Left / Super+Right**: previous/next tab, wrapping at the ends
 
 Tab text and the `+` character also work with the mouse. Right-click `+` for a
 menu (Up/Down and Enter select; Escape or an outside click dismisses it).

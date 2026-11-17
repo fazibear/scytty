@@ -82,11 +82,14 @@ fn status_icons_expand_only_into_a_following_space() {
 
 #[test]
 fn zoom_shortcuts_and_limits() {
-    let stroke = |key: &str, control| Keystroke {
+    let zoomed_font_size = |current, initial, stroke: &Keystroke| {
+        key_bindings::default_action(stroke).and_then(|action| action.font_size(current, initial))
+    };
+    let stroke = |key: &str, platform| Keystroke {
         key: key.into(),
         key_char: None,
         modifiers: Modifiers {
-            control,
+            platform,
             ..Default::default()
         },
     };
@@ -99,12 +102,9 @@ fn zoom_shortcuts_and_limits() {
     assert_eq!(zoomed_font_size(16., 18., &stroke("c", true)), None);
     assert_eq!(zoomed_font_size(24., 18., &stroke("0", true)), Some(18.));
     assert_eq!(zoomed_font_size(24., 18., &stroke("0", false)), None);
-    let mut command_zero = stroke("0", false);
-    command_zero.modifiers.platform = true;
-    assert_eq!(
-        zoomed_font_size(24., 18., &command_zero),
-        cfg!(target_os = "macos").then_some(18.)
-    );
+    let mut control_zero = stroke("0", false);
+    control_zero.modifiers.control = true;
+    assert_eq!(zoomed_font_size(24., 18., &control_zero), None);
 }
 
 #[test]

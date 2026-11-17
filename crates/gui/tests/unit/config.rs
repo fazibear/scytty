@@ -1,4 +1,149 @@
 use super::*;
+
+#[test]
+fn configurable_key_bindings_override_defaults_and_pass_through() -> Result<()> {
+    use crate::key_bindings::Action;
+    let defaults = Config::default();
+    for (key, action) in [
+        ("t", Action::NewTab),
+        ("f", Action::Find),
+        ("left", Action::PreviousTab),
+        ("right", Action::NextTab),
+        ("c", Action::Copy),
+        ("v", Action::Paste),
+        ("up", Action::PreviousPrompt),
+        ("down", Action::NextPrompt),
+    ] {
+        assert_eq!(
+            defaults.key_actions(&gpui::Keystroke::parse(&format!("super-{key}"))?),
+            vec![action]
+        );
+    }
+    for key in [
+        "ctrl-t",
+        "ctrl-left",
+        "ctrl-right",
+        "ctrl-+",
+        "ctrl--",
+        "ctrl-0",
+        "ctrl-shift-f",
+        "ctrl-shift-c",
+        "ctrl-shift-v",
+        "ctrl-shift-up",
+        "ctrl-shift-down",
+    ] {
+        assert!(
+            defaults
+                .key_actions(&gpui::Keystroke::parse(key)?)
+                .is_empty(),
+            "{key}"
+        );
+    }
+    let custom = Config::parse(
+        "return {key_bindings={
+        {keys={key.SUPER,key.T},actions={}},
+        {keys={key.CTRL,key.SHIFT,key.N},actions={'new_tab'}},
+        {keys={key.SUPER,key.R},actions={'reload_config'}},
+        {keys={key.SUPER,key.F},actions={'zoom_in','find'}}
+    }}",
+    )?;
+    let mut new_tab = gpui::Keystroke::parse("super-t")?;
+    new_tab.key_char = Some("t".into());
+    assert!(custom.key_actions(&new_tab).is_empty());
+    let mut shortcut = gpui::Keystroke::parse("ctrl-shift-n")?;
+    shortcut.key_char = Some("N".into());
+    assert_eq!(custom.key_actions(&shortcut), vec![Action::NewTab]);
+    shortcut.modifiers.alt = true;
+    assert!(custom.key_actions(&shortcut).is_empty());
+    assert_eq!(
+        custom.key_actions(&gpui::Keystroke::parse("super-r")?),
+        vec![Action::ReloadConfig]
+    );
+    assert_eq!(
+        custom.key_actions(&gpui::Keystroke::parse("super-f")?),
+        vec![Action::ZoomIn, Action::Find]
+    );
+    assert_eq!(
+        Config::parse("return {}")?.key_actions(&new_tab),
+        vec![Action::NewTab]
+    );
+    Ok(())
+}
+
+#[test]
+fn key_binding_arrays_and_constants_are_validated() -> Result<()> {
+    use crate::key_bindings::Action;
+    for (constant, stroke) in [
+        ("T", "t"),
+        ("DIGIT0", "0"),
+        ("F35", "f35"),
+        ("MINUS", "-"),
+        ("PLUS", "+"),
+        ("PAGE_UP", "pageup"),
+        ("SPACE", "space"),
+        ("BACKSLASH", "\\"),
+    ] {
+        let config = Config::parse(&format!(
+            "return {{key_bindings={{{{keys={{key.{constant},key.SUPER}},actions={{'copy'}}}}}}}}"
+        ))?;
+        assert_eq!(
+            config.key_actions(&gpui::Keystroke::parse(&format!("super-{stroke}"))?),
+            vec![Action::Copy]
+        );
+    }
+    for body in [
+        "false",
+        "{['super-t']='new_tab'}",
+        "{false}",
+        "{[2]={keys={key.T},actions={}}}",
+        "{{keys={key.SUPER,key.T},action={'copy'}}}",
+        "{{keys={key.SUPER,key.T}}}",
+        "{{actions={'copy'}}}",
+        "{{keys={},actions={'copy'}}}",
+        "{{keys={key.SUPER},actions={'copy'}}}",
+        "{{keys={key.SUPER,key.SUPER,key.T},actions={'copy'}}}",
+        "{{keys={key.T,key.N},actions={'copy'}}}",
+        "{{keys={key.SUPER,key.UNKNOWN},actions={'copy'}}}",
+        "{{keys={[1]=key.SUPER,[3]=key.T},actions={'copy'}}}",
+        "{{keys={key.SUPER,key.T},actions=false}}",
+        "{{keys={key.SUPER,key.T},actions={false}}}",
+        "{{keys={key.SUPER,key.T},actions={'unknown'}}}",
+        "{{keys={key.SUPER,key.T},actions={[2]='copy'}}}",
+        "{{keys={key.SUPER,key.T},actions={'copy'}},{keys={key.T,key.SUPER},actions={'paste'}}}",
+    ] {
+        assert!(
+            Config::parse(&format!("return {{key_bindings={body}}}")).is_err(),
+            "{body}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn key_binding_actions_run_in_order_and_stop_on_error() -> Result<()> {
+    use crate::key_bindings::{Action, run_actions};
+    let actions = [Action::ZoomIn, Action::ZoomOut, Action::Find];
+    let mut seen = Vec::new();
+    run_actions(&actions, |action| {
+        seen.push(action);
+        Ok(())
+    })?;
+    assert_eq!(seen, actions);
+    seen.clear();
+    assert!(
+        run_actions(&actions, |action| {
+            seen.push(action);
+            if action == Action::ZoomOut {
+                bail!("failed")
+            }
+            Ok(())
+        })
+        .is_err()
+    );
+    assert_eq!(seen, actions[..2]);
+    run_actions(&[], |_| panic!("empty actions must pass through"))?;
+    Ok(())
+}
 #[test]
 fn configurable_plus_menu() -> Result<()> {
     let config = Config::parse(

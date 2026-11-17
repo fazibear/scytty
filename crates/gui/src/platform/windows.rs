@@ -89,18 +89,6 @@ pub fn configure_notification(notification: &mut notify_rust::Notification) {
     notification.app_id("app.scytty.terminal");
 }
 
-pub fn command_modifier(modifiers: Modifiers) -> bool {
-    modifiers.control
-}
-
-pub fn clipboard_modifier(modifiers: Modifiers) -> bool {
-    command_modifier(modifiers) && modifiers.shift
-}
-
-pub fn zoom_modifier(modifiers: Modifiers) -> bool {
-    !modifiers.alt && modifiers.control
-}
-
 pub fn titlebar() -> Stateful<Div> {
     super::titlebar_base()
         .pl(px(8.))
