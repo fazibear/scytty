@@ -533,13 +533,13 @@ impl Gui {
                     find.reversed = false;
                     true
                 }
-                "c" if platform::command_modifier(m) => {
+                "c" if platform::clipboard_modifier(m) => {
                     cx.write_to_clipboard(ClipboardItem::new_string(
                         find.query[find.selection.clone()].to_owned(),
                     ));
                     true
                 }
-                "v" if platform::command_modifier(m) => {
+                "v" if platform::clipboard_modifier(m) => {
                     if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
                         find.replace(None, &text);
                     }

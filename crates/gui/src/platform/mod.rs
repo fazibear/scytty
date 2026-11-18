@@ -7,7 +7,15 @@ mod current;
 pub use current::*;
 
 pub fn command_modifier(modifiers: Modifiers) -> bool {
-    modifiers.platform
+    if cfg!(target_os = "windows") {
+        modifiers.control
+    } else {
+        modifiers.platform
+    }
+}
+
+pub fn clipboard_modifier(modifiers: Modifiers) -> bool {
+    command_modifier(modifiers) && (!cfg!(target_os = "windows") || modifiers.shift)
 }
 
 pub fn paint_scrollbar(

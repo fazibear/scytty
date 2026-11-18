@@ -85,11 +85,12 @@ fn zoom_shortcuts_and_limits() {
     let zoomed_font_size = |current, initial, stroke: &Keystroke| {
         key_bindings::default_action(stroke).and_then(|action| action.font_size(current, initial))
     };
-    let stroke = |key: &str, platform| Keystroke {
+    let stroke = |key: &str, pressed| Keystroke {
         key: key.into(),
         key_char: None,
         modifiers: Modifiers {
-            platform,
+            platform: pressed && !cfg!(target_os = "windows"),
+            control: pressed && cfg!(target_os = "windows"),
             ..Default::default()
         },
     };
@@ -104,7 +105,10 @@ fn zoom_shortcuts_and_limits() {
     assert_eq!(zoomed_font_size(24., 18., &stroke("0", false)), None);
     let mut control_zero = stroke("0", false);
     control_zero.modifiers.control = true;
-    assert_eq!(zoomed_font_size(24., 18., &control_zero), None);
+    assert_eq!(
+        zoomed_font_size(24., 18., &control_zero),
+        cfg!(target_os = "windows").then_some(18.)
+    );
 }
 
 #[test]

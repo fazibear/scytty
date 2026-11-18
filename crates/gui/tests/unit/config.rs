@@ -14,8 +14,24 @@ fn configurable_key_bindings_override_defaults_and_pass_through() -> Result<()> 
         ("up", Action::PreviousPrompt),
         ("down", Action::NextPrompt),
     ] {
+        let modifier = if cfg!(target_os = "windows") {
+            if matches!(
+                action,
+                Action::Find
+                    | Action::Copy
+                    | Action::Paste
+                    | Action::PreviousPrompt
+                    | Action::NextPrompt
+            ) {
+                "ctrl-shift"
+            } else {
+                "ctrl"
+            }
+        } else {
+            "super"
+        };
         assert_eq!(
-            defaults.key_actions(&gpui::Keystroke::parse(&format!("super-{key}"))?),
+            defaults.key_actions(&gpui::Keystroke::parse(&format!("{modifier}-{key}"))?),
             vec![action]
         );
     }
@@ -32,15 +48,38 @@ fn configurable_key_bindings_override_defaults_and_pass_through() -> Result<()> 
         "ctrl-shift-up",
         "ctrl-shift-down",
     ] {
-        assert!(
+        assert_eq!(
             defaults
                 .key_actions(&gpui::Keystroke::parse(key)?)
                 .is_empty(),
+            !cfg!(target_os = "windows"),
             "{key}"
         );
     }
+    if cfg!(target_os = "windows") {
+        for key in [
+            "ctrl-c",
+            "ctrl-v",
+            "ctrl-f",
+            "ctrl-up",
+            "ctrl-down",
+            "super-c",
+            "super-v",
+            "super-f",
+            "super-t",
+            "super-0",
+        ] {
+            assert!(
+                defaults
+                    .key_actions(&gpui::Keystroke::parse(key)?)
+                    .is_empty(),
+                "{key}"
+            );
+        }
+    }
     let custom = Config::parse(
         "return {key_bindings={
+        {keys={key.CTRL,key.T},actions={}},
         {keys={key.SUPER,key.T},actions={}},
         {keys={key.CTRL,key.SHIFT,key.N},actions={'new_tab'}},
         {keys={key.SUPER,key.R},actions={'reload_config'}},
@@ -50,6 +89,11 @@ fn configurable_key_bindings_override_defaults_and_pass_through() -> Result<()> 
     let mut new_tab = gpui::Keystroke::parse("super-t")?;
     new_tab.key_char = Some("t".into());
     assert!(custom.key_actions(&new_tab).is_empty());
+    assert!(
+        custom
+            .key_actions(&gpui::Keystroke::parse("ctrl-t")?)
+            .is_empty()
+    );
     let mut shortcut = gpui::Keystroke::parse("ctrl-shift-n")?;
     shortcut.key_char = Some("N".into());
     assert_eq!(custom.key_actions(&shortcut), vec![Action::NewTab]);
@@ -65,7 +109,11 @@ fn configurable_key_bindings_override_defaults_and_pass_through() -> Result<()> 
     );
     assert_eq!(
         Config::parse("return {}")?.key_actions(&new_tab),
-        vec![Action::NewTab]
+        if cfg!(target_os = "windows") {
+            vec![]
+        } else {
+            vec![Action::NewTab]
+        }
     );
     Ok(())
 }

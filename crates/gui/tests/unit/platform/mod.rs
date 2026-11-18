@@ -11,14 +11,30 @@ fn keyboard_modifiers() {
         platform: true,
         ..Default::default()
     };
-    assert!(!command_modifier(control));
-    assert!(command_modifier(command));
-    assert!(!command_modifier(Modifiers {
-        shift: true,
-        ..control
-    }));
-    assert!(command_modifier(Modifiers {
-        shift: true,
-        ..command
-    }));
+    let windows = cfg!(target_os = "windows");
+    assert_eq!(command_modifier(control), windows);
+    assert_eq!(command_modifier(command), !windows);
+    assert!(!clipboard_modifier(control));
+    assert_eq!(clipboard_modifier(command), !windows);
+    assert_eq!(
+        clipboard_modifier(Modifiers {
+            shift: true,
+            ..control
+        }),
+        windows
+    );
+    assert_eq!(
+        command_modifier(Modifiers {
+            shift: true,
+            ..control
+        }),
+        windows
+    );
+    assert_eq!(
+        command_modifier(Modifiers {
+            shift: true,
+            ..command
+        }),
+        !windows
+    );
 }

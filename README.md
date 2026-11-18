@@ -279,11 +279,11 @@ search query again.
 
 ## Default shortcuts
 
-All platforms use **Super** (Command on macOS, Windows/Super elsewhere).
-Ctrl shortcuts are left to terminal applications unless explicitly configured.
+macOS/Linux use **Super** (Command on macOS). Windows uses Ctrl-based defaults
+to avoid reserved Windows-key shortcuts. Custom bindings can still use any modifier.
 The OS or window manager may intercept some Super combinations before Scytty receives them.
 
-- **Super+F**: search the active tab's buffer,
+- **Super+F** (**Ctrl+Shift+F** on Windows): search the active tab's buffer,
   including scrollback. **Enter / Shift+Enter** moves to the next/previous match;
   **Escape** closes search. Matching is literal with full, locale-independent Unicode
   case folding (`Straße` matches `STRASSE`, and `Σ`, `σ`, `ς` match). Matches map
@@ -291,18 +291,18 @@ The OS or window manager may intercept some Super combinations before Scytty rec
   is applied. Search runs locally, including for SSH sessions,
   and leaves the terminal's text selection intact.
 
-- **Super+Plus / Super+Minus**: increase/decrease font size
-- **Super+0**: reset to the configured font size
+- **Super+Plus / Super+Minus** (**Ctrl+Plus / Ctrl+Minus** on Windows): increase/decrease font size
+- **Super+0** (**Ctrl+0** on Windows): reset to the configured font size
 - **Drag**: select terminal text
-- **Super+Up / Super+Down**:
+- **Super+Up / Super+Down** (**Ctrl+Shift+Up / Ctrl+Shift+Down** on Windows):
   jump to the previous/next shell prompt (OSC 133)
-- **Super+Shift+Click**:
+- **Super+Shift+Click** (**Ctrl+Shift+Click** on Windows):
   select the clicked command's output (OSC 133)
 - **Scrollbar**: drag the right-hand thumb or click its track to navigate scrollback
-- **Super+C / Super+V**:
+- **Super+C / Super+V** (**Ctrl+Shift+C / Ctrl+Shift+V** on Windows):
   copy selection / paste clipboard (including over SSH)
-- **Super+T**: new tab
-- **Super+Left / Super+Right**: previous/next tab, wrapping at the ends
+- **Super+T** (**Ctrl+T** on Windows): new tab
+- **Super+Left / Super+Right** (**Ctrl+Left / Ctrl+Right** on Windows): previous/next tab, wrapping at the ends
 
 Tab text and the `+` character also work with the mouse. Right-click `+` for a
 menu (Up/Down and Enter select; Escape or an outside click dismisses it).
