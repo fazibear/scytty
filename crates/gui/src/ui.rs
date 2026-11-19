@@ -115,6 +115,7 @@ impl Gui {
         self.plus_menu_position = None;
         match action {
             config::MenuAction::NewTab => self.request(Request::NewTab),
+            config::MenuAction::CloseTab => self.request(Request::CloseTab { id: self.active }),
             config::MenuAction::ReloadConfig => {
                 let mut config = Config::load()?;
                 config.font_family = fonts::resolve(&config.font_family)?;
@@ -370,19 +371,6 @@ impl Gui {
             .child(
                 div()
                     .id("new-tab")
-                    .on_mouse_down(
-                        MouseButton::Right,
-                        cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                            this.plus_menu_selected = 0;
-                            this.plus_menu_position = if this.config.plus_menu.is_empty() {
-                                None
-                            } else {
-                                Some(event.position)
-                            };
-                            cx.stop_propagation();
-                            cx.notify();
-                        }),
-                    )
                     .flex_shrink_0()
                     .px(px(8.))
                     .cursor_pointer()
@@ -399,7 +387,21 @@ impl Gui {
                 .max_w(relative(0.4))
                 .overflow_hidden(),
         );
-        Ok(platform::window_controls(bar).into_any_element())
+        Ok(platform::window_controls(bar)
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                    this.plus_menu_selected = 0;
+                    this.plus_menu_position = if this.config.plus_menu.is_empty() {
+                        None
+                    } else {
+                        Some(event.position)
+                    };
+                    cx.stop_propagation();
+                    cx.notify();
+                }),
+            )
+            .into_any_element())
     }
     pub(super) fn find_overlay(&self, window: &Window, cx: &mut Context<Self>) -> Option<Div> {
         let mut find_overlay = None;

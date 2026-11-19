@@ -5,6 +5,7 @@ use std::path::PathBuf;
 #[derive(Clone, Debug, PartialEq)]
 pub enum MenuAction {
     NewTab,
+    CloseTab,
     NewWindow,
     ReloadConfig,
     Connect {
@@ -55,6 +56,10 @@ impl Default for Config {
                 MenuEntry {
                     label: "New tab".into(),
                     action: MenuAction::NewTab,
+                },
+                MenuEntry {
+                    label: "Close tab".into(),
+                    action: MenuAction::CloseTab,
                 },
                 MenuEntry {
                     label: "New window".into(),
@@ -271,7 +276,7 @@ impl Config {
                         }
                         let name: String = entry.get("action")?;
                         let action = match name.as_str() {
-                            "new_tab" | "new_window" | "reload_config" => {
+                            "new_tab" | "close_tab" | "new_window" | "reload_config" => {
                                 if entry.contains_key("host")?
                                     || entry.contains_key("session")?
                                     || entry.contains_key("bin")?
@@ -280,6 +285,8 @@ impl Config {
                                 }
                                 if name == "new_tab" {
                                     MenuAction::NewTab
+                                } else if name == "close_tab" {
+                                    MenuAction::CloseTab
                                 } else if name == "new_window" {
                                     MenuAction::NewWindow
                                 } else {

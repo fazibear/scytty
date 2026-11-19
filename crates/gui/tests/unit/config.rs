@@ -248,6 +248,23 @@ fn key_binding_actions_run_in_order_and_stop_on_error() -> Result<()> {
     Ok(())
 }
 #[test]
+fn close_tab_menu_entry() -> Result<()> {
+    assert!(
+        Config::default()
+            .plus_menu
+            .iter()
+            .any(|entry| entry.action == MenuAction::CloseTab)
+    );
+    let config = Config::parse("return {plus_menu={{label='Close tab',action='close_tab'}}}")?;
+    assert_eq!(config.plus_menu[0].action, MenuAction::CloseTab);
+    assert!(
+        Config::parse("return {plus_menu={{label='Close',action='close_tab',host='host'}}}")
+            .is_err()
+    );
+    Ok(())
+}
+
+#[test]
 fn configurable_plus_menu() -> Result<()> {
     let config = Config::parse(
         "return {plus_menu={{label='New',action='new_tab'},{label='Window',action='new_window'},{label='Prod',action='connect',host='user@host',session='work'}}}",

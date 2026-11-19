@@ -323,7 +323,7 @@ The OS or window manager may intercept some Super combinations before Scytty rec
 - **Super+T** (**Ctrl+T** on Windows): new tab
 - **Super+Left / Super+Right** (**Ctrl+Left / Ctrl+Right** on Windows): previous/next tab, wrapping at the ends
 
-Tab text and the `+` character also work with the mouse. Right-click `+` for a
+Tab text and the `+` character also work with the mouse. Right-click anywhere on the top bar for a
 menu (Up/Down and Enter select; Escape or an outside click dismisses it).
 Configure entries in `config.lua`:
 
@@ -331,6 +331,7 @@ Configure entries in `config.lua`:
 return {
   plus_menu = {
     { label = "New tab", action = "new_tab" },
+    { label = "Close tab", action = "close_tab" },
     { label = "New window", action = "new_window" },
     { label = "Reload config", action = "reload_config" },
     { label = "Production", action = "connect", host = "user@server", session = "work", bin = "/usr/bin/fish" },
@@ -338,7 +339,9 @@ return {
 }
 ```
 
-The default menu contains New tab, New window and Reload config; `plus_menu = {}`
+The default menu contains New tab, Close tab, New window and Reload config.
+Close tab ends the active tab's shell/processes; closing the last tab closes the window.
+`plus_menu = {}`
 disables it. Reload config re-reads Lua and its modules for the current window,
 applying font, opacity, status, menu and scrollback settings without reconnecting.
 Invalid config keeps the previous settings. Window dimensions apply only to new

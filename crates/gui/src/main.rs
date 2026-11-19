@@ -590,7 +590,7 @@ impl Gui {
             KeyAction::ReloadConfig => {
                 self.menu_action(&config::MenuAction::ReloadConfig, window, cx)
             }
-            KeyAction::CloseTab => self.request(Request::CloseTab { id: self.active }),
+            KeyAction::CloseTab => self.menu_action(&config::MenuAction::CloseTab, window, cx),
             KeyAction::PreviousTab | KeyAction::NextTab => {
                 if let Some(id) = adjacent_tab(
                     &self.order,
