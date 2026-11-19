@@ -166,6 +166,8 @@ plain string or `{text = "…", color = "#RRGGBB"}`; color is optional. Text mus
 nonempty and single-line. Unicode symbols depend on your installed font.
 Nerd Font icons followed by a space (e.g. `" "`) use `icon_scale`, just like tab
 and status text; the space is consumed to reserve the wider icon cell.
+Menu-entry labels use the same rule, e.g. `label = " New tab"`; only the icon is
+scaled, while menu text stays at its normal size.
 Hidden indicators take no space. Tab formatting and button actions are unchanged.
 It occupies the titlebar area beside the native macOS window buttons; drag empty
 bar space to move the window. The native title text is hidden.
@@ -333,11 +335,15 @@ return {
     { label = "New tab", action = "new_tab" },
     { label = "Close tab", action = "close_tab" },
     { label = "New window", action = "new_window" },
+    { separator = true },
     { label = "Reload config", action = "reload_config" },
     { label = "Production", action = "connect", host = "user@server", session = "work", bin = "/usr/bin/fish" },
   },
 }
 ```
+
+Use `{ separator = true }` for a non-clickable divider; Up/Down skips dividers.
+A menu containing only separators does not open.
 
 The default menu contains New tab, Close tab, New window and Reload config.
 Close tab ends the active tab's shell/processes; closing the last tab closes the window.

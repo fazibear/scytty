@@ -65,8 +65,12 @@ fn selected_tab_keeps_neighboring_tabs_visible() {
 }
 
 #[test]
-fn tab_button_icons_use_shared_scaling_runs_and_preserve_colors() {
+fn bar_and_menu_icons_use_shared_scaling_runs_and_preserve_colors() {
     for color in [Some(rgb(0xcba6f7)), Some(rgba(0))] {
+        assert_eq!(
+            status_runs(vec![(" New tab".into(), color)]),
+            vec![("".into(), color, true), ("New tab".into(), color, false)]
+        );
         assert_eq!(
             status_runs(vec![(" ".into(), color)]),
             vec![("".into(), color, true)]

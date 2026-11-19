@@ -248,6 +248,35 @@ fn key_binding_actions_run_in_order_and_stop_on_error() -> Result<()> {
     Ok(())
 }
 #[test]
+fn menu_separators_are_not_selectable() -> Result<()> {
+    let config = Config::parse(
+        "return {plus_menu={{separator=true},{label='New',action='new_tab'},{separator=true},{separator=true},{label='Close',action='close_tab'},{separator=true}}}",
+    )?;
+    assert_eq!(config.plus_menu[0].action, MenuAction::Separator);
+    assert_eq!(config.next_menu_item(5, true), Some(1));
+    assert_eq!(config.next_menu_item(1, true), Some(4));
+    assert_eq!(config.next_menu_item(4, true), Some(1));
+    assert_eq!(config.next_menu_item(1, false), Some(4));
+    assert_eq!(config.next_menu_item(4, false), Some(1));
+    assert_eq!(
+        Config::parse("return {plus_menu={}}")?.next_menu_item(0, true),
+        None
+    );
+    let separators = Config::parse("return {plus_menu={{separator=true},{separator=true}}}")?;
+    assert_eq!(separators.next_menu_item(0, true), None);
+    assert_eq!(separators.next_menu_item(0, false), None);
+    for entry in [
+        "{separator=false}",
+        "{separator='true'}",
+        "{separator=true,label='No'}",
+        "{separator=true,action='new_tab'}",
+    ] {
+        assert!(Config::parse(&format!("return {{plus_menu={{{entry}}}}}")).is_err());
+    }
+    Ok(())
+}
+
+#[test]
 fn close_tab_menu_entry() -> Result<()> {
     assert!(
         Config::default()

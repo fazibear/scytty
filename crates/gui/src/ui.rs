@@ -79,22 +79,27 @@ impl Gui {
         let segments =
             self.config
                 .status_text(name, title, index, active, self.host.is_some(), tab)?;
-        Ok(self.text_segments(segments))
+        Ok(self.text_segments(segments, self.config.font_size, px(28.)))
     }
-    fn text_segments(&self, segments: Vec<(String, Option<Rgba>)>) -> Div {
+    fn text_segments(
+        &self,
+        segments: Vec<(String, Option<Rgba>)>,
+        font_size: f32,
+        line_height: Pixels,
+    ) -> Div {
         let mut line = div().flex().items_center().flex_shrink_0();
         for (text, color, expand) in status_runs(segments) {
             let scale = if expand { self.config.icon_scale } else { 1. };
             let mut run = div()
                 .flex_shrink_0()
-                .text_size(px(self.config.font_size * scale))
+                .text_size(px(font_size * scale))
                 .text_color(color.unwrap_or(rgb(0xc6d0f5)))
                 .child(text);
             if expand {
                 run = run
-                    .w(self.cell.width * 2.)
-                    .h(px(28.))
-                    .line_height(px(28.))
+                    .w(self.cell.width * (2. * font_size / self.config.font_size))
+                    .h(line_height)
+                    .line_height(line_height)
                     .text_center()
                     .overflow_hidden();
             }
@@ -104,7 +109,11 @@ impl Gui {
     }
     fn tab_label(&self, label: &config::TabBarLabel) -> Div {
         let color = label.color.unwrap_or(rgb(0xdcdcdc));
-        self.text_segments(vec![(label.text.clone(), Some(color))])
+        self.text_segments(
+            vec![(label.text.clone(), Some(color))],
+            self.config.font_size,
+            px(28.),
+        )
     }
     pub(super) fn menu_action(
         &mut self,
@@ -114,6 +123,7 @@ impl Gui {
     ) -> Result<()> {
         self.plus_menu_position = None;
         match action {
+            config::MenuAction::Separator => Ok(()),
             config::MenuAction::NewTab => self.request(Request::NewTab),
             config::MenuAction::CloseTab => self.request(Request::CloseTab { id: self.active }),
             config::MenuAction::ReloadConfig => {
@@ -174,9 +184,21 @@ impl Gui {
     pub(super) fn plus_menu(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let position = self.plus_menu_position?;
         let width = px(240.).min(window.viewport_size().width);
-        let row_height = px(self.config.font_size * 1.5 + 8.);
-        let height = (row_height * self.config.plus_menu.len() as f32 + px(8.))
-            .min(window.viewport_size().height);
+        let row_height = px((self.config.font_size * 1.5).max(14. * self.config.icon_scale) + 8.);
+        let height = (self
+            .config
+            .plus_menu
+            .iter()
+            .map(|entry| {
+                if entry.action == config::MenuAction::Separator {
+                    px(9.)
+                } else {
+                    row_height
+                }
+            })
+            .fold(px(0.), |height, row| height + row)
+            + px(8.))
+        .min(window.viewport_size().height);
         let mut menu = div()
             .id("plus-menu")
             .absolute()
@@ -211,6 +233,16 @@ impl Gui {
                 }
             }));
         for (index, entry) in self.config.plus_menu.iter().enumerate() {
+            if entry.action == config::MenuAction::Separator {
+                menu = menu.child(
+                    div()
+                        .h(px(9.))
+                        .px(px(8.))
+                        .py(px(4.))
+                        .child(div().h(px(1.)).bg(rgb(0x785494))),
+                );
+                continue;
+            }
             let action = entry.action.clone();
             menu = menu.child(
                 div()
@@ -239,7 +271,11 @@ impl Gui {
                             cx.notify();
                         }
                     }))
-                    .child(entry.label.clone())
+                    .child(self.text_segments(
+                        vec![(entry.label.clone(), Some(rgb(0xf4edf9)))],
+                        14.,
+                        row_height,
+                    ))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         let result = this.menu_action(&action, window, cx);
                         this.focus.focus(window);
@@ -391,12 +427,11 @@ impl Gui {
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                    this.plus_menu_selected = 0;
-                    this.plus_menu_position = if this.config.plus_menu.is_empty() {
-                        None
-                    } else {
-                        Some(event.position)
-                    };
+                    let first = this
+                        .config
+                        .next_menu_item(this.config.plus_menu.len().saturating_sub(1), true);
+                    this.plus_menu_selected = first.unwrap_or(0);
+                    this.plus_menu_position = first.map(|_| event.position);
                     cx.stop_propagation();
                     cx.notify();
                 }),

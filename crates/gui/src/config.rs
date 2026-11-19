@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum MenuAction {
+    Separator,
     NewTab,
     CloseTab,
     NewWindow,
@@ -113,6 +114,18 @@ impl Config {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(e) => Err(e).with_context(|| format!("cannot read {}", path.display())),
         }
+    }
+    pub fn next_menu_item(&self, current: usize, forward: bool) -> Option<usize> {
+        let len = self.plus_menu.len();
+        (1..=len)
+            .map(|step| {
+                if forward {
+                    (current % len + step) % len
+                } else {
+                    (current % len + len - step) % len
+                }
+            })
+            .find(|&index| self.plus_menu[index].action != MenuAction::Separator)
     }
     pub fn key_actions(&self, stroke: &gpui::Keystroke) -> Vec<crate::key_bindings::Action> {
         if let Some(binding) = self.key_bindings.iter().find(|binding| {
@@ -261,6 +274,14 @@ impl Config {
                     .sequence_values::<Table>()
                     .map(|entry| -> Result<MenuEntry> {
                         let entry = entry?;
+                        if entry.contains_key("separator")? {
+                            if !matches!(entry.raw_get::<Value>("separator")?, Value::Boolean(true))
+                                || entry.clone().pairs::<Value, Value>().count() != 1
+                            {
+                                bail!("menu separator must be {{separator = true}} without other fields");
+                            }
+                            return Ok(MenuEntry { label: String::new(), action: MenuAction::Separator });
+                        }
                         for key in entry.clone().pairs::<String, Value>() {
                             let (key, _) = key?;
                             if !matches!(

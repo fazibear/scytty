@@ -492,21 +492,25 @@ impl Gui {
         if self.plus_menu_position.is_some() {
             match stroke.key.as_str() {
                 "escape" => self.plus_menu_position = None,
-                "down" => {
-                    self.plus_menu_selected =
-                        (self.plus_menu_selected + 1) % self.config.plus_menu.len()
-                }
-                "up" => {
-                    self.plus_menu_selected =
-                        (self.plus_menu_selected + self.config.plus_menu.len() - 1)
-                            % self.config.plus_menu.len()
+                "down" | "up" => {
+                    if let Some(index) = self
+                        .config
+                        .next_menu_item(self.plus_menu_selected, stroke.key == "down")
+                    {
+                        self.plus_menu_selected = index;
+                    }
                 }
                 "enter" => {
-                    let action = self.config.plus_menu[self.plus_menu_selected]
-                        .action
-                        .clone();
-                    let result = self.menu_action(&action, window, cx);
-                    self.report(result, cx);
+                    if let Some(action) = self
+                        .config
+                        .plus_menu
+                        .get(self.plus_menu_selected)
+                        .map(|entry| entry.action.clone())
+                        .filter(|action| *action != config::MenuAction::Separator)
+                    {
+                        let result = self.menu_action(&action, window, cx);
+                        self.report(result, cx);
+                    }
                 }
                 _ => {}
             }
