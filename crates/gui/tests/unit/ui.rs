@@ -87,6 +87,17 @@ fn bar_and_menu_icons_use_shared_scaling_runs_and_preserve_colors() {
 }
 
 #[test]
+fn menu_fits_longest_label_and_keeps_both_padding_margins() {
+    assert_eq!(
+        menu_width([px(40.), px(250.), px(90.)].into_iter(), px(800.)),
+        px(294.)
+    );
+    assert_eq!(menu_width([px(250.)].into_iter(), px(200.)), px(200.));
+    assert_eq!(menu_width([px(40.)].into_iter(), px(800.)), px(84.));
+    assert_eq!(menu_width(std::iter::empty(), px(800.)), px(44.));
+}
+
+#[test]
 fn message_rows_preserve_unicode_and_blank_lines() {
     assert_eq!(
         message_line_rows("hello 世界", [6].into_iter()),

@@ -48,6 +48,11 @@ fn tab_group_offset(
     }
 }
 
+fn menu_width(labels: impl Iterator<Item = Pixels>, viewport: Pixels) -> Pixels {
+    // Menu border/padding plus row border/padding on both sides.
+    (labels.fold(px(0.), Pixels::max) + px(44.)).min(viewport)
+}
+
 fn error_button(id: &'static str, label: &'static str) -> Stateful<Div> {
     div()
         .id(id)
@@ -183,7 +188,38 @@ impl Gui {
     }
     pub(super) fn plus_menu(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let position = self.plus_menu_position?;
-        let width = px(240.).min(window.viewport_size().width);
+        let mut menu_font = font(self.config.font_family.clone());
+        menu_font.weight = FontWeight::MEDIUM;
+        let width = menu_width(
+            self.config
+                .plus_menu
+                .iter()
+                .filter(|entry| entry.action != config::MenuAction::Separator)
+                .map(|entry| {
+                    status_runs(vec![(entry.label.clone(), None)])
+                        .into_iter()
+                        .fold(px(0.), |width, (text, _, expand)| {
+                            width
+                                + if expand {
+                                    self.cell.width * (2. * 14. / self.config.font_size)
+                                } else {
+                                    let run = TextRun {
+                                        len: text.len(),
+                                        font: menu_font.clone(),
+                                        color: rgb(0xf4edf9).into(),
+                                        background_color: None,
+                                        underline: None,
+                                        strikethrough: None,
+                                    };
+                                    window
+                                        .text_system()
+                                        .shape_line(text.into(), px(14.), &[run], None)
+                                        .width
+                                }
+                        })
+                }),
+            window.viewport_size().width,
+        );
         let row_height = px((self.config.font_size * 1.5).max(14. * self.config.icon_scale) + 8.);
         let height = (self
             .config
@@ -271,11 +307,11 @@ impl Gui {
                             cx.notify();
                         }
                     }))
-                    .child(self.text_segments(
+                    .child(div().w_full().overflow_hidden().child(self.text_segments(
                         vec![(entry.label.clone(), Some(rgb(0xf4edf9)))],
                         14.,
                         row_height,
-                    ))
+                    )))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         let result = this.menu_action(&action, window, cx);
                         this.focus.focus(window);
