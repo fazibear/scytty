@@ -30,6 +30,24 @@ fn hidden_tabs(
     (left, right)
 }
 
+fn tab_group_offset(
+    viewport: Bounds<Pixels>,
+    offset: Pixels,
+    first: Bounds<Pixels>,
+    last: Bounds<Pixels>,
+) -> Pixels {
+    if last.right() - first.left() > viewport.size.width + px(0.5) {
+        return offset;
+    }
+    if first.left() + offset < viewport.left() {
+        viewport.left() - first.left()
+    } else if last.right() + offset > viewport.right() {
+        viewport.right() - last.right()
+    } else {
+        offset
+    }
+}
+
 fn error_button(id: &'static str, label: &'static str) -> Stateful<Div> {
     div()
         .id(id)
@@ -267,7 +285,7 @@ impl Gui {
         let width = self.tab_scroll.bounds().size.width;
         let max_tab_width = px(self.config.font_size * 16.);
         let max_tab_width = if width > px(0.) {
-            max_tab_width.min(width)
+            max_tab_width.min(width / self.order.len().clamp(1, 3) as f32)
         } else {
             max_tab_width
         };
@@ -278,16 +296,33 @@ impl Gui {
         }
         cx.on_next_frame(window, move |this, _, cx| {
             let viewport = this.tab_scroll.bounds();
+            let mut offset = this.tab_scroll.offset();
+            let previous_offset = offset.x;
+            if let Some(index) = this.order.iter().position(|tab| tab.id == this.active)
+                && let Some(first) = this.tab_scroll.bounds_for_item(index.saturating_sub(1))
+                && let Some(last) = this
+                    .tab_scroll
+                    .bounds_for_item((index + 1).min(this.order.len() - 1))
+            {
+                offset.x = tab_group_offset(viewport, offset.x, first, last);
+            }
+            let scrolled = f32::from(offset.x - previous_offset).abs() > 0.5;
+            if scrolled {
+                this.tab_scroll.set_offset(offset);
+            }
             let overflow = hidden_tabs(
                 viewport,
-                this.tab_scroll.offset().x,
+                offset.x,
                 (0..this.order.len()).filter_map(|index| {
                     this.tab_scroll
                         .bounds_for_item(index)
                         .map(|bounds| (index, bounds))
                 }),
             );
-            if this.tab_overflow != overflow || f32::from(viewport.size.width - width).abs() > 0.5 {
+            if scrolled
+                || this.tab_overflow != overflow
+                || f32::from(viewport.size.width - width).abs() > 0.5
+            {
                 this.tab_overflow = overflow;
                 cx.notify();
             }

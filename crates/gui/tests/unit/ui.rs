@@ -31,6 +31,40 @@ fn tab_overflow_tracks_clipped_sides_and_nearest_hidden_tab() {
 }
 
 #[test]
+fn selected_tab_keeps_neighboring_tabs_visible() {
+    let bounds = |x, width| Bounds::new(point(px(x), px(0.)), size(px(width), px(28.)));
+    let viewport = bounds(50., 120.);
+    // Active is the middle of the three 40px tabs, initially at the right edge.
+    assert_eq!(
+        tab_group_offset(viewport, px(0.), bounds(130., 40.), bounds(210., 40.)),
+        px(-80.)
+    );
+    // The same group at the left edge must reveal its predecessor.
+    assert_eq!(
+        tab_group_offset(viewport, px(-120.), bounds(130., 40.), bounds(210., 40.)),
+        px(-80.)
+    );
+    assert_eq!(
+        tab_group_offset(viewport, px(-80.), bounds(130., 40.), bounds(210., 40.)),
+        px(-80.)
+    );
+    // First/last selected tabs only need their one existing neighbor.
+    assert_eq!(
+        tab_group_offset(viewport, px(-40.), bounds(50., 40.), bounds(90., 40.)),
+        px(0.)
+    );
+    assert_eq!(
+        tab_group_offset(viewport, px(0.), bounds(170., 40.), bounds(210., 40.)),
+        px(-80.)
+    );
+    // A stale pre-resize layout must not alternate between opposite edges.
+    assert_eq!(
+        tab_group_offset(viewport, px(-40.), bounds(50., 80.), bounds(210., 80.)),
+        px(-40.)
+    );
+}
+
+#[test]
 fn message_rows_preserve_unicode_and_blank_lines() {
     assert_eq!(
         message_line_rows("hello 世界", [6].into_iter()),

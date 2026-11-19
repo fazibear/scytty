@@ -148,7 +148,9 @@ modules can return a function and apply it with `require("settings")(config)`.
 No working-directory change or WezTerm API shim is required.
 
 The bar is a single transparent monospace text row, with clickable tabs and `+`.
-When tabs overflow, the active tab stays visible. `<` and `>` appear only when tabs
+When tabs overflow, the active tab and its immediate neighbors stay visible;
+long titles are clipped as needed to fit up to three tabs. The selected tab is not
+at the visible edge unless it is the first or last tab. `<` and `>` appear only when tabs
 are hidden on that side; clicking an indicator activates the nearest hidden tab.
 The new-tab button stays outside the scrolling strip. Customize the three labels
 in `config.lua`, then use **Reload config**:
