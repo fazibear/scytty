@@ -65,6 +65,24 @@ fn selected_tab_keeps_neighboring_tabs_visible() {
 }
 
 #[test]
+fn tab_button_icons_use_shared_scaling_runs_and_preserve_colors() {
+    for color in [Some(rgb(0xcba6f7)), Some(rgba(0))] {
+        assert_eq!(
+            status_runs(vec![(" ".into(), color)]),
+            vec![("".into(), color, true)]
+        );
+        assert_eq!(
+            status_runs(vec![(" ".into(), color)]),
+            vec![("".into(), color, true)]
+        );
+        assert_eq!(
+            status_runs(vec![("".into(), color)]),
+            vec![("".into(), color, false)]
+        );
+    }
+}
+
+#[test]
 fn message_rows_preserve_unicode_and_blank_lines() {
     assert_eq!(
         message_line_rows("hello 世界", [6].into_iter()),

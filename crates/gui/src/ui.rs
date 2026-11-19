@@ -76,10 +76,13 @@ impl Gui {
         active: bool,
         tab: Option<&TabInfo>,
     ) -> Result<Div> {
-        let mut line = div().flex().items_center().flex_shrink_0();
         let segments =
             self.config
                 .status_text(name, title, index, active, self.host.is_some(), tab)?;
+        Ok(self.text_segments(segments))
+    }
+    fn text_segments(&self, segments: Vec<(String, Option<Rgba>)>) -> Div {
+        let mut line = div().flex().items_center().flex_shrink_0();
         for (text, color, expand) in status_runs(segments) {
             let scale = if expand { self.config.icon_scale } else { 1. };
             let mut run = div()
@@ -97,7 +100,11 @@ impl Gui {
             }
             line = line.child(run);
         }
-        Ok(line)
+        line
+    }
+    fn tab_label(&self, label: &config::TabBarLabel) -> Div {
+        let color = label.color.unwrap_or(rgb(0xdcdcdc));
+        self.text_segments(vec![(label.text.clone(), Some(color))])
     }
     pub(super) fn menu_action(
         &mut self,
@@ -241,44 +248,34 @@ impl Gui {
         }
         Some(menu.into_any_element())
     }
-    fn tab_indicator(&self, left: bool, cx: &mut Context<Self>) -> Stateful<Div> {
+    fn tab_indicator(&self, left: bool, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
         let index = if left {
             self.tab_overflow.0
         } else {
             self.tab_overflow.1
         };
+        let id = self.order.get(index?)?.id;
         let label = if left {
             &self.config.tab_left_indicator
         } else {
             &self.config.tab_right_indicator
         };
-        // Reserve each label's width even when hidden to avoid overflow oscillation.
-        let mut button = div()
-            .id(if left { "tabs-left" } else { "tabs-right" })
-            .min_w(px(20.))
-            .px(px(4.))
-            .flex_shrink_0()
-            .text_center()
-            .child(label.text.clone());
-        if let Some(color) = label.color {
-            button = button.text_color(color);
-        }
-        if let Some(id) = index
-            .and_then(|index| self.order.get(index))
-            .map(|tab| tab.id)
-        {
-            button = button
+        Some(
+            div()
+                .id(if left { "tabs-left" } else { "tabs-right" })
+                .min_w(px(20.))
+                .px(px(4.))
+                .flex_shrink_0()
+                .text_center()
+                .child(self.tab_label(label))
                 .cursor_pointer()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(move |this, _, window, cx| {
                     let result = this.request(Request::Activate { id });
                     this.focus.focus(window);
                     this.report(result, cx);
-                }));
-        } else {
-            button = button.text_color(rgba(0));
-        }
-        button
+                })),
+        )
     }
     pub(super) fn header(&self, window: &mut Window, cx: &mut Context<Self>) -> Result<AnyElement> {
         let active = self.order.iter().find(|t| t.id == self.active);
@@ -366,9 +363,9 @@ impl Gui {
                     .flex_shrink()
                     .min_w_0()
                     .child(self.segments("left_status", "", 0, false, active)?)
-                    .child(self.tab_indicator(true, cx))
+                    .children(self.tab_indicator(true, cx))
                     .child(tabs)
-                    .child(self.tab_indicator(false, cx)),
+                    .children(self.tab_indicator(false, cx)),
             )
             .child(
                 div()
@@ -389,8 +386,7 @@ impl Gui {
                     .flex_shrink_0()
                     .px(px(8.))
                     .cursor_pointer()
-                    .text_color(self.config.new_tab_button.color.unwrap_or(rgb(0xdcdcdc)))
-                    .child(self.config.new_tab_button.text.clone())
+                    .child(self.tab_label(&self.config.new_tab_button))
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(|this, _, window, cx| {
                         let result = this.request(Request::NewTab);

@@ -163,8 +163,10 @@ new_tab_button = {text = "＋", color = "#a6e3a1"},
 
 Defaults are `<`, `>`, and `+` with inherited text color. Each setting accepts a
 plain string or `{text = "…", color = "#RRGGBB"}`; color is optional. Text must be
-nonempty and single-line. Unicode symbols depend on your installed font. The indicator slots reserve their
-label width even while hidden. Tab formatting and button actions are unchanged.
+nonempty and single-line. Unicode symbols depend on your installed font.
+Nerd Font icons followed by a space (e.g. `" "`) use `icon_scale`, just like tab
+and status text; the space is consumed to reserve the wider icon cell.
+Hidden indicators take no space. Tab formatting and button actions are unchanged.
 It occupies the titlebar area beside the native macOS window buttons; drag empty
 bar space to move the window. The native title text is hidden.
 Defaults show plain tab titles (white active, gray inactive), a 25-character
