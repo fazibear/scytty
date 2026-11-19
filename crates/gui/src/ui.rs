@@ -12,6 +12,24 @@ fn message_line_rows(line: &str, breaks: impl Iterator<Item = usize>) -> Vec<Str
         .collect()
 }
 
+fn hidden_tabs(
+    viewport: Bounds<Pixels>,
+    offset: Pixels,
+    tabs: impl Iterator<Item = (usize, Bounds<Pixels>)>,
+) -> (Option<usize>, Option<usize>) {
+    let mut left = None;
+    let mut right = None;
+    for (index, bounds) in tabs {
+        if bounds.left() + offset < viewport.left() - px(0.5) {
+            left = Some(index);
+        }
+        if right.is_none() && bounds.right() + offset > viewport.right() + px(0.5) {
+            right = Some(index);
+        }
+    }
+    (left, right)
+}
+
 fn error_button(id: &'static str, label: &'static str) -> Stateful<Div> {
     div()
         .id(id)
@@ -205,16 +223,84 @@ impl Gui {
         }
         Some(menu.into_any_element())
     }
-    pub(super) fn header(&self, cx: &mut Context<Self>) -> Result<AnyElement> {
+    fn tab_indicator(&self, left: bool, cx: &mut Context<Self>) -> Stateful<Div> {
+        let index = if left {
+            self.tab_overflow.0
+        } else {
+            self.tab_overflow.1
+        };
+        let label = if left {
+            &self.config.tab_left_indicator
+        } else {
+            &self.config.tab_right_indicator
+        };
+        // Reserve each label's width even when hidden to avoid overflow oscillation.
+        let mut button = div()
+            .id(if left { "tabs-left" } else { "tabs-right" })
+            .min_w(px(20.))
+            .px(px(4.))
+            .flex_shrink_0()
+            .text_center()
+            .child(label.text.clone());
+        if let Some(color) = label.color {
+            button = button.text_color(color);
+        }
+        if let Some(id) = index
+            .and_then(|index| self.order.get(index))
+            .map(|tab| tab.id)
+        {
+            button = button
+                .cursor_pointer()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    let result = this.request(Request::Activate { id });
+                    this.focus.focus(window);
+                    this.report(result, cx);
+                }));
+        } else {
+            button = button.text_color(rgba(0));
+        }
+        button
+    }
+    pub(super) fn header(&self, window: &mut Window, cx: &mut Context<Self>) -> Result<AnyElement> {
         let active = self.order.iter().find(|t| t.id == self.active);
+        let width = self.tab_scroll.bounds().size.width;
+        let max_tab_width = px(self.config.font_size * 16.);
+        let max_tab_width = if width > px(0.) {
+            max_tab_width.min(width)
+        } else {
+            max_tab_width
+        };
+        if width > px(0.)
+            && let Some(index) = self.order.iter().position(|tab| tab.id == self.active)
+        {
+            self.tab_scroll.scroll_to_item(index);
+        }
+        cx.on_next_frame(window, move |this, _, cx| {
+            let viewport = this.tab_scroll.bounds();
+            let overflow = hidden_tabs(
+                viewport,
+                this.tab_scroll.offset().x,
+                (0..this.order.len()).filter_map(|index| {
+                    this.tab_scroll
+                        .bounds_for_item(index)
+                        .map(|bounds| (index, bounds))
+                }),
+            );
+            if this.tab_overflow != overflow || f32::from(viewport.size.width - width).abs() > 0.5 {
+                this.tab_overflow = overflow;
+                cx.notify();
+            }
+        });
         let mut bar = platform::titlebar();
         let mut tabs = div()
+            .id("tab-strip")
             .flex()
             .items_center()
             .flex_shrink()
             .min_w_0()
-            .overflow_hidden()
-            .child(self.segments("left_status", "", 0, false, active)?);
+            .overflow_x_scroll()
+            .track_scroll(&self.tab_scroll);
         for (index, tab) in self.order.iter().enumerate() {
             let id = tab.id;
             tabs = tabs.child(
@@ -226,7 +312,7 @@ impl Gui {
                     Some(tab),
                 )?
                 .id(("tab", id))
-                .max_w(px(self.config.font_size * 16.))
+                .max_w(max_tab_width)
                 .overflow_hidden()
                 .cursor_pointer()
                 .on_mouse_down(MouseButton::Left, move |_, _, cx| cx.stop_propagation())
@@ -237,33 +323,46 @@ impl Gui {
                 })),
             );
         }
-        bar = bar.child(tabs).child(
-            div()
-                .id("new-tab")
-                .on_mouse_down(
-                    MouseButton::Right,
-                    cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                        this.plus_menu_selected = 0;
-                        this.plus_menu_position = if this.config.plus_menu.is_empty() {
-                            None
-                        } else {
-                            Some(event.position)
-                        };
-                        cx.stop_propagation();
-                        cx.notify();
-                    }),
-                )
-                .flex_shrink_0()
-                .px(px(8.))
-                .cursor_pointer()
-                .child("+")
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_click(cx.listener(|this, _, window, cx| {
-                    let result = this.request(Request::NewTab);
-                    this.focus.focus(window);
-                    this.report(result, cx);
-                })),
-        );
+        bar = bar
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .flex_shrink()
+                    .min_w_0()
+                    .child(self.segments("left_status", "", 0, false, active)?)
+                    .child(self.tab_indicator(true, cx))
+                    .child(tabs)
+                    .child(self.tab_indicator(false, cx)),
+            )
+            .child(
+                div()
+                    .id("new-tab")
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                            this.plus_menu_selected = 0;
+                            this.plus_menu_position = if this.config.plus_menu.is_empty() {
+                                None
+                            } else {
+                                Some(event.position)
+                            };
+                            cx.stop_propagation();
+                            cx.notify();
+                        }),
+                    )
+                    .flex_shrink_0()
+                    .px(px(8.))
+                    .cursor_pointer()
+                    .text_color(self.config.new_tab_button.color.unwrap_or(rgb(0xdcdcdc)))
+                    .child(self.config.new_tab_button.text.clone())
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        let result = this.request(Request::NewTab);
+                        this.focus.focus(window);
+                        this.report(result, cx);
+                    })),
+            );
         bar = bar.child(div().flex_1()).child(
             self.segments("right_status", "", 0, false, active)?
                 .max_w(relative(0.4))

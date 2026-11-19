@@ -148,6 +148,21 @@ modules can return a function and apply it with `require("settings")(config)`.
 No working-directory change or WezTerm API shim is required.
 
 The bar is a single transparent monospace text row, with clickable tabs and `+`.
+When tabs overflow, the active tab stays visible. `<` and `>` appear only when tabs
+are hidden on that side; clicking an indicator activates the nearest hidden tab.
+The new-tab button stays outside the scrolling strip. Customize the three labels
+in `config.lua`, then use **Reload config**:
+
+```lua
+tab_left_indicator = {text = "←", color = "#cba6f7"},
+tab_right_indicator = {text = "→", color = "#cba6f7"},
+new_tab_button = {text = "＋", color = "#a6e3a1"},
+```
+
+Defaults are `<`, `>`, and `+` with inherited text color. Each setting accepts a
+plain string or `{text = "…", color = "#RRGGBB"}`; color is optional. Text must be
+nonempty and single-line. Unicode symbols depend on your installed font. The indicator slots reserve their
+label width even while hidden. Tab formatting and button actions are unchanged.
 It occupies the titlebar area beside the native macOS window buttons; drag empty
 bar space to move the window. The native title text is hidden.
 Defaults show plain tab titles (white active, gray inactive), a 25-character

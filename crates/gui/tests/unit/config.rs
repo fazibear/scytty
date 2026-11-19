@@ -1,6 +1,61 @@
 use super::*;
 
 #[test]
+fn tab_bar_labels_are_configurable_and_validated() -> Result<()> {
+    let defaults = Config::default();
+    assert_eq!(
+        (
+            &*defaults.tab_left_indicator.text,
+            &*defaults.tab_right_indicator.text,
+            &*defaults.new_tab_button.text
+        ),
+        ("<", ">", "+")
+    );
+    assert!(defaults.new_tab_button.color.is_none());
+    let config = Config::parse(
+        "return {tab_left_indicator='←',tab_right_indicator='More →',new_tab_button='＋'}",
+    )?;
+    assert_eq!(config.tab_left_indicator.text, "←");
+    assert_eq!(config.tab_right_indicator.text, "More →");
+    assert_eq!(config.new_tab_button.text, "＋");
+    for key in [
+        "tab_left_indicator",
+        "tab_right_indicator",
+        "new_tab_button",
+    ] {
+        let colored = Config::parse(&format!(
+            "return {{{key}={{text='← More',color='#a6e3a1'}}}}"
+        ))?;
+        let label = match key {
+            "tab_left_indicator" => colored.tab_left_indicator,
+            "tab_right_indicator" => colored.tab_right_indicator,
+            _ => colored.new_tab_button,
+        };
+        assert_eq!(label.text, "← More");
+        assert_eq!(label.color, Some(gpui::rgb(0xa6e3a1)));
+        for value in [
+            "false",
+            "42",
+            "''",
+            "'   '",
+            "'a\\nb'",
+            "'\\027'",
+            "{}",
+            "{text=42}",
+            "{text='X',color=false}",
+            "{text='X',color='oops'}",
+            "{text='X',colour='#ffffff'}",
+        ] {
+            assert!(
+                Config::parse(&format!("return {{{key}={value}}}")).is_err(),
+                "{key}={value}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn configurable_key_bindings_override_defaults_and_pass_through() -> Result<()> {
     use crate::key_bindings::Action;
     let defaults = Config::default();

@@ -20,6 +20,12 @@ pub struct MenuEntry {
 }
 
 #[derive(Debug)]
+pub struct TabBarLabel {
+    pub text: String,
+    pub color: Option<gpui::Rgba>,
+}
+
+#[derive(Debug)]
 pub struct Config {
     pub plus_menu: Vec<MenuEntry>,
     pub key_bindings: Vec<crate::key_bindings::Binding>,
@@ -27,6 +33,9 @@ pub struct Config {
     pub default_cursor_style: ghostty_vt::terminal::CursorStyle,
     pub scrollback_mb: u16,
     pub font_family: String,
+    pub tab_left_indicator: TabBarLabel,
+    pub tab_right_indicator: TabBarLabel,
+    pub new_tab_button: TabBarLabel,
     pub icon_scale: f32,
     pub background_opacity: f32,
     pub window_width: f32,
@@ -61,6 +70,18 @@ impl Default for Config {
             default_cursor_style: ghostty_vt::terminal::CursorStyle::Block,
             scrollback_mb: 16,
             font_family: "monospace".into(),
+            tab_left_indicator: TabBarLabel {
+                text: "<".into(),
+                color: None,
+            },
+            tab_right_indicator: TabBarLabel {
+                text: ">".into(),
+                color: None,
+            },
+            new_tab_button: TabBarLabel {
+                text: "+".into(),
+                color: None,
+            },
             icon_scale: 1.5,
             background_opacity: 0.7,
             window_width: 960.0,
@@ -303,6 +324,47 @@ impl Config {
                     _ => {
                         bail!("default_cursor_style must be block, bar, underline or block_hollow")
                     }
+                };
+                continue;
+            }
+            let label = match key.as_str() {
+                "tab_left_indicator" => Some(&mut config.tab_left_indicator),
+                "tab_right_indicator" => Some(&mut config.tab_right_indicator),
+                "new_tab_button" => Some(&mut config.new_tab_button),
+                _ => None,
+            };
+            if let Some(label) = label {
+                let (text, color) = match raw {
+                    Value::String(text) => (Value::String(text), Value::Nil),
+                    Value::Table(fields) => {
+                        for field in fields.clone().pairs::<String, Value>() {
+                            let (field, _) = field?;
+                            if !matches!(field.as_str(), "text" | "color") {
+                                bail!("unknown {key} field: {field}");
+                            }
+                        }
+                        (fields.raw_get("text")?, fields.raw_get("color")?)
+                    }
+                    _ => bail!("{key} must be text or a {{text, color}} table"),
+                };
+                let Value::String(text) = text else {
+                    bail!("{key}.text must be a string")
+                };
+                let text = text.to_str()?;
+                if text.trim().is_empty() || text.chars().any(char::is_control) {
+                    bail!("{key} must be nonempty, single-line text without control characters");
+                }
+                let color = match color {
+                    Value::Nil => None,
+                    Value::String(color) => Some(
+                        gpui::Rgba::try_from(color.to_str()?.as_ref())
+                            .map_err(|_| anyhow::anyhow!("invalid {key} color; use #RRGGBB"))?,
+                    ),
+                    _ => bail!("{key}.color must be a color string"),
+                };
+                *label = TabBarLabel {
+                    text: text.to_owned(),
+                    color,
                 };
                 continue;
             }

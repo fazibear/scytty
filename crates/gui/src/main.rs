@@ -91,6 +91,8 @@ struct Gui {
     scroll_remainder: f32,
     horizontal_scroll_remainder: f32,
     reported_mouse_buttons: Vec<(u64, MouseButton)>,
+    tab_scroll: ScrollHandle,
+    tab_overflow: (Option<usize>, Option<usize>),
     keyboard: keyboard::Keyboard,
     scroll_drag: Option<(u64, Pixels)>,
     link_press: Option<(gpui::Point<Pixels>, String)>,
@@ -142,6 +144,8 @@ impl Gui {
             scroll_remainder: 0.,
             horizontal_scroll_remainder: 0.,
             reported_mouse_buttons: Vec::new(),
+            tab_scroll: ScrollHandle::new(),
+            tab_overflow: (None, None),
             keyboard: keyboard::Keyboard::default(),
             scroll_drag: None,
             link_press: None,
@@ -1316,7 +1320,7 @@ impl Render for Gui {
             .on_key_down(cx.listener(Self::key_down))
             .on_key_up(cx.listener(Self::key_up))
             .on_modifiers_changed(cx.listener(Self::modifiers_changed));
-        match self.header(cx) {
+        match self.header(window, cx) {
             Ok(header) => root = root.child(header),
             Err(e) => {
                 self.error = Some(format!("{e:#}"));

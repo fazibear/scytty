@@ -8,6 +8,10 @@ return {
   background_opacity = 0.7,
   window_width = 960,
   window_height = 640,
+  -- Strings or {text = "←", color = "#cba6f7"}; color is optional.
+  tab_left_indicator = "<",
+  tab_right_indicator = ">",
+  new_tab_button = "+",
 
   -- Overrides default shortcuts; empty actions pass the key to the terminal.
   -- key.SUPER = Cmd on macOS, Windows/Super elsewhere. Apply with Reload config.
