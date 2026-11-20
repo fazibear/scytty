@@ -5,7 +5,9 @@ use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 
 // Bump whenever messages or the Ghostty snapshot format become incompatible.
-pub const PROTOCOL_VERSION: u32 = 6;
+pub const PROTOCOL_VERSION: u32 = 7;
+pub const SESSION_ATTACHED_ERROR: &str =
+    "Session is already attached to another window; close it before reattaching";
 const MAGIC: &[u8; 8] = b"SCYTTY\r\n";
 
 /// Fixed preamble: both peers write before reading, independent of frame encoding.
@@ -65,6 +67,10 @@ pub enum Request {
         rows: u16,
         width: u32,
         height: u32,
+    },
+    TakeOver {
+        session: String,
+        bin: Option<String>,
     },
     CloseSession,
     SetScrollback {

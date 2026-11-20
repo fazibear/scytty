@@ -136,7 +136,7 @@ impl Session {
 }
 enum Event {
     Shutdown,
-    Attach(Client, String, Option<String>),
+    Attach(Client, String, Option<String>, bool),
     Request(u64, Request),
     Detached(u64),
     Output(String, u64, Vec<u8>),
@@ -303,8 +303,10 @@ pub fn run() -> Result<()> {
                     eprintln!("client handshake: {error:#}");
                     return;
                 }
-                let Ok(Request::Attach { session, bin }) = protocol::receive(&mut stream) else {
-                    return;
+                let (session, bin, take_over) = match protocol::receive(&mut stream) {
+                    Ok(Request::Attach { session, bin }) => (session, bin, false),
+                    Ok(Request::TakeOver { session, bin }) => (session, bin, true),
+                    _ => return,
                 };
                 if session.is_empty()
                     || session.len() > 128
@@ -332,7 +334,10 @@ pub fn run() -> Result<()> {
                     output,
                     socket,
                 };
-                if tx.send(Event::Attach(client, session, bin)).is_err() {
+                if tx
+                    .send(Event::Attach(client, session, bin, take_over))
+                    .is_err()
+                {
                     return;
                 }
                 thread::spawn(move || {
@@ -369,7 +374,7 @@ pub fn run() -> Result<()> {
         let result: Result<()> = (|| {
             match event {
                 Event::Shutdown => {}
-                Event::Attach(mut client, name, bin) => {
+                Event::Attach(mut client, name, bin, take_over) => {
                     if !sessions.contains_key(&name) {
                         let tab = match new_tab(&name, next_tab, &tx, 16, None, bin.as_deref()) {
                             Ok(tab) => tab,
@@ -394,11 +399,12 @@ pub fn run() -> Result<()> {
                         );
                     }
                     let session = sessions.get_mut(&name).unwrap();
-                    if session.client.is_some() {
+                    if session.client.is_some() && !take_over {
                         // Send before dropping Client, which shuts down its socket.
-                        protocol::send(&mut client.socket, &Update::Error(
-                            "Session is already attached to another window; close it before reattaching".into(),
-                        ))?;
+                        protocol::send(
+                            &mut client.socket,
+                            &Update::Error(protocol::SESSION_ATTACHED_ERROR.into()),
+                        )?;
                         return Ok(());
                     }
                     if bin.is_some() && bin != session.bin {
@@ -420,6 +426,9 @@ pub fn run() -> Result<()> {
                     }
                     for tab in &session.tabs {
                         client.send(snapshot(tab)?)?;
+                    }
+                    if let Some(previous) = session.client.take() {
+                        let _ = previous.send(Update::Error("This window was disconnected because the session was connected in another window. Your tabs and shells are still running.".into()));
                     }
                     session.client = Some(client);
                     session.state();
@@ -560,7 +569,9 @@ pub fn run() -> Result<()> {
                                 });
                             }
                         }
-                        Request::Attach { .. } => bail!("already attached"),
+                        Request::Attach { .. } | Request::TakeOver { .. } => {
+                            bail!("already attached")
+                        }
                         Request::CloseSession => unreachable!(),
                     }
                 }

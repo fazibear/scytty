@@ -24,23 +24,29 @@ pub fn connect_session(
     session: String,
     bin: Option<String>,
     existing_path: Option<String>,
+    take_over: bool,
 ) -> Result<Connected> {
     let connection = match (host.as_deref(), existing_path.as_deref()) {
         (Some(host), Some(path)) => remote::connect_existing(host, path)?,
         (Some(host), None) => remote::connect(host)?,
         (None, _) => connect_local()?,
     };
-    attach(connection, session, bin).map_err(|error| {
-        match remote::restart_after_mismatch(host.as_deref()) {
+    attach(connection, session, bin, take_over).map_err(
+        |error| match remote::restart_after_mismatch(host.as_deref()) {
             Err(warning) if warning.downcast_ref::<remote::RestartRequired>().is_some() => {
                 warning.context(format!("{error:#}"))
             }
             _ => error,
-        }
-    })
+        },
+    )
 }
 
-pub fn attach(connection: Connection, session: String, bin: Option<String>) -> Result<Connected> {
+pub fn attach(
+    connection: Connection,
+    session: String,
+    bin: Option<String>,
+    take_over: bool,
+) -> Result<Connected> {
     let mut writer = connection.socket.try_clone()?;
     writer.set_write_timeout(Some(Duration::from_secs(5)))?;
     writer.set_read_timeout(Some(Duration::from_secs(5)))?;
@@ -52,7 +58,12 @@ pub fn attach(connection: Connection, session: String, bin: Option<String>) -> R
         }
     })?;
     writer.set_read_timeout(None)?;
-    protocol::send(&mut writer, &Request::Attach { session, bin })?;
+    let request = if take_over {
+        Request::TakeOver { session, bin }
+    } else {
+        Request::Attach { session, bin }
+    };
+    protocol::send(&mut writer, &request)?;
     let mut reader = writer.try_clone()?;
     let (tx, updates) = mpsc::sync_channel(256);
     let (wake, wakeups) = async_channel::bounded(1);

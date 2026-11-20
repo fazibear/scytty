@@ -15,7 +15,13 @@ mod transport {
     #[test]
     fn ssh_connection_failure_is_returned_from_worker() {
         let result = thread::spawn(|| {
-            connect_session(Some("-invalid-host".into()), "test".into(), None, None)
+            connect_session(
+                Some("-invalid-host".into()),
+                "test".into(),
+                None,
+                None,
+                false,
+            )
         })
         .join()
         .expect("connection worker panicked");
@@ -73,35 +79,43 @@ mod transport {
     fn rejected_attach_has_no_pipelined_configuration() -> Result<()> {
         use scytty_common::protocol::{self, Request, Update};
         use std::{io::Read, time::Duration};
-        let (socket, mut server) = stream::pair()?;
-        let connection = Connection {
-            socket,
-            child: Command::new("/bin/sleep").arg("30").spawn()?,
-        };
-        let peer = thread::spawn(move || -> Result<()> {
-            protocol::handshake(&mut server)?;
-            assert!(matches!(
-                protocol::receive::<Request>(&mut server)?,
-                Request::Attach { .. }
-            ));
-            protocol::send(&mut server, &Update::Error("attach rejected".into()))?;
-            server.set_read_timeout(Some(Duration::from_millis(100)))?;
-            let error = server
-                .read(&mut [0])
-                .expect_err("configuration was sent before attach succeeded");
-            assert!(matches!(
-                error.kind(),
-                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-            ));
-            Ok(())
-        });
-        let connected = attach(connection, "test".into(), None)?;
-        assert!(
-            matches!(connected.updates.recv_timeout(Duration::from_secs(5))??, Update::Error(message) if message == "attach rejected")
-        );
-        // The UI receives a wakeup without waiting for a polling timer.
-        connected.wakeups.recv_blocking()?;
-        peer.join().expect("protocol peer panicked")?;
+        for take_over in [false, true] {
+            let (socket, mut server) = stream::pair()?;
+            let connection = Connection {
+                socket,
+                child: Command::new("/bin/sleep").arg("30").spawn()?,
+            };
+            let peer = thread::spawn(move || -> Result<()> {
+                protocol::handshake(&mut server)?;
+                let request = protocol::receive::<Request>(&mut server)?;
+                if take_over {
+                    assert!(
+                        matches!(request, Request::TakeOver { session, bin: None } if session == "test")
+                    );
+                } else {
+                    assert!(
+                        matches!(request, Request::Attach { session, bin: None } if session == "test")
+                    );
+                }
+                protocol::send(&mut server, &Update::Error("attach rejected".into()))?;
+                server.set_read_timeout(Some(Duration::from_millis(100)))?;
+                let error = server
+                    .read(&mut [0])
+                    .expect_err("configuration was sent before attach succeeded");
+                assert!(matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ));
+                Ok(())
+            });
+            let connected = attach(connection, "test".into(), None, take_over)?;
+            assert!(
+                matches!(connected.updates.recv_timeout(Duration::from_secs(5))??, Update::Error(message) if message == "attach rejected")
+            );
+            // The UI receives a wakeup without waiting for a polling timer.
+            connected.wakeups.recv_blocking()?;
+            peer.join().expect("protocol peer panicked")?;
+        }
         Ok(())
     }
 

@@ -690,6 +690,23 @@ impl Gui {
                             .flex_shrink_0()
                             .object_fit(ObjectFit::Contain),
                     )
+                    .when(
+                        self.error.as_deref() == Some(protocol::SESSION_ATTACHED_ERROR),
+                        |screen| {
+                            screen.child(
+                                error_button(
+                                    "take-over-session",
+                                    "Disconnect previous and connect",
+                                )
+                                .mt(px(8.))
+                                .on_click(cx.listener(
+                                    |this, _, _, cx| {
+                                        this.start_connect_choice(None, None, true, cx);
+                                    },
+                                )),
+                            )
+                        },
+                    )
                     .children(self.remote_restart.as_ref().map(|warning| {
                         div()
                             .flex()
@@ -704,7 +721,12 @@ impl Gui {
                                                 .take()
                                                 .and_then(|warning| warning.existing_path);
                                             if let Some(path) = path {
-                                                this.start_connect_choice(None, Some(path), cx);
+                                                this.start_connect_choice(
+                                                    None,
+                                                    Some(path),
+                                                    false,
+                                                    cx,
+                                                );
                                             }
                                         })),
                                 )

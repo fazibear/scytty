@@ -193,6 +193,44 @@ fn tabs_and_reattach() -> Result<()> {
         matches!(protocol::receive::<Update>(&mut duplicate)?, Update::Error(message) if message.contains("already attached"))
     );
     drop(duplicate);
+    let mut invalid_takeover = UnixStream::connect(&path)?;
+    invalid_takeover.set_read_timeout(Some(Duration::from_secs(5)))?;
+    protocol::handshake(&mut invalid_takeover)?;
+    protocol::send(
+        &mut invalid_takeover,
+        &Request::TakeOver {
+            session: "test".into(),
+            bin: Some("/bin/false".into()),
+        },
+    )?;
+    assert!(
+        matches!(protocol::receive::<Update>(&mut invalid_takeover)?, Update::Error(message) if message.contains("different program"))
+    );
+    protocol::send(&mut stream, &Request::Activate { id: first })?;
+    assert_eq!(state(&mut stream)?.1, first);
+    let mut replacement = UnixStream::connect(&path)?;
+    replacement.set_read_timeout(Some(Duration::from_secs(5)))?;
+    protocol::handshake(&mut replacement)?;
+    protocol::send(
+        &mut replacement,
+        &Request::TakeOver {
+            session: "test".into(),
+            bin: None,
+        },
+    )?;
+    assert!(
+        matches!(protocol::receive::<Update>(&mut replacement)?, Update::Snapshot { id, .. } if id == first)
+    );
+    assert_eq!(state(&mut replacement)?, (vec![first], first));
+    loop {
+        if let Update::Error(message) = protocol::receive(&mut stream)? {
+            assert!(message.contains("another window"));
+            break;
+        }
+    }
+    assert!(protocol::receive::<Update>(&mut stream).is_err());
+    drop(stream);
+    let mut stream = replacement;
     protocol::send(&mut stream, &Request::SetScrollback { megabytes: 65 })?;
     loop {
         if let Update::Error(message) = protocol::receive(&mut stream)? {

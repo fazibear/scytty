@@ -53,6 +53,11 @@ with a reconnect banner; keyboard input is discarded while disconnected, never
 buffered or replayed. Reattachment restores fresh terminal snapshots. Initial
 connection failures, rejected sessions, and incompatible servers still show an error;
 reconnect never approves a daemon restart or takes over another attached window.
+For an already-attached session, **Disconnect previous and connect** explicitly
+transfers it to this window without ending its tabs or shells. The previous window
+shows a disconnection message instead of automatically taking the session back.
+This requires protocol 7 on both client and server. Upgrade/restart the daemon only
+when safe: restarting the server ends existing sessions.
 The socket and server log live in `~/.scytty`. Sessions do not survive server restart;
 if the session no longer exists, reattachment creates a new shell.
 
@@ -353,8 +358,9 @@ applying font, opacity, status, menu and scrollback settings without reconnectin
 Invalid config keeps the previous settings. Window dimensions apply only to new
 windows. Lowering the scrollback limit may discard older history.
 New window creates a fresh session on the current host. Connect opens a separate
-window; its session defaults to `default`. An already-attached session still
-requires closing its existing window first. Optional `bin` selects an executable
+window; its session defaults to `default`. An already-attached session offers
+**Disconnect previous and connect**, or you can close its existing window first.
+Optional `bin` selects an executable
 path or name on the server (not a shell command or argument list). It is used for
 the new session and all its new tabs; omitted `bin` keeps the server's default
 shell or an existing session's program. An explicit different `bin` cannot replace

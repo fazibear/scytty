@@ -81,6 +81,7 @@ struct Gui {
     native_progress: Option<scytty_common::protocol::Progress>,
     error: Option<String>,
     remote_restart: Option<remote::RestartRequired>,
+    server_path: Option<String>,
     focus: FocusHandle,
     window_handle: AnyWindowHandle,
     bounds: Bounds<Pixels>,
@@ -135,6 +136,7 @@ impl Gui {
             active: 0,
             error,
             remote_restart: None,
+            server_path: None,
             focus: cx.focus_handle(),
             bounds: Bounds::default(),
             cell: size(px(8.), px(20.)),
@@ -194,15 +196,23 @@ impl Gui {
         view
     }
     fn start_connect(&mut self, restart: Option<remote::RestartRequired>, cx: &mut Context<Self>) {
-        self.start_connect_choice(restart, None, cx);
+        self.start_connect_choice(restart, None, false, cx);
     }
 
     fn start_connect_choice(
         &mut self,
         restart: Option<remote::RestartRequired>,
         existing_path: Option<String>,
+        take_over: bool,
         cx: &mut Context<Self>,
     ) {
+        if restart.is_some() {
+            self.server_path = None;
+        }
+        if existing_path.is_some() {
+            self.server_path = existing_path;
+        }
+        let existing_path = self.server_path.clone();
         self.connecting = true;
         self.error = None;
         self.remote_restart = None;
@@ -214,7 +224,7 @@ impl Gui {
             if let Some(warning) = restart {
                 warning.restart()?;
             }
-            transport::connect_session(host, session, bin, existing_path)
+            transport::connect_session(host, session, bin, existing_path, take_over)
         });
         cx.spawn(async move |view, cx| {
             let result = task.await;
