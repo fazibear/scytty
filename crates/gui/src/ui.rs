@@ -29,10 +29,11 @@ fn hidden_tabs(
     let mut left = None;
     let mut right = None;
     for (index, bounds) in tabs {
-        if bounds.left() + offset < viewport.left() - px(0.5) {
+        // Windows pixel snapping can move child edges by up to one logical pixel.
+        if bounds.left() + offset < viewport.left() - px(1.) {
             left = Some(index);
         }
-        if right.is_none() && bounds.right() + offset > viewport.right() + px(0.5) {
+        if right.is_none() && bounds.right() + offset > viewport.right() + px(1.) {
             right = Some(index);
         }
     }
@@ -405,17 +406,6 @@ impl Gui {
                 || this.tab_overflow != overflow
                 || f32::from(viewport.size.width - width).abs() > 0.5
             {
-                if std::env::var_os("SCYTTY_DEBUG_TABS").is_some() {
-                    use std::io::Write;
-                    let path = std::env::temp_dir().join("scytty-tabs.log");
-                    // Bound temporary diagnostics during a rapidly oscillating layout.
-                    if std::fs::metadata(&path).map_or(true, |m| m.len() < 1024 * 1024) {
-                        let bounds: Vec<_> = (0..this.order.len()).map(|i| (i, this.tab_scroll.bounds_for_item(i))).collect();
-                        let result = std::fs::OpenOptions::new().create(true).append(true).open(path)
-                            .and_then(|mut file| writeln!(file, "active={} viewport={viewport:?} previous_width={width:?} offset_before={previous_offset:?} offset_after={:?} indicators_before={:?} indicators_after={overflow:?} tabs={bounds:?}", this.active, offset.x, this.tab_overflow));
-                        if let Err(error) = result { eprintln!("tab diagnostics: {error}"); }
-                    }
-                }
                 this.tab_overflow = overflow;
                 cx.notify();
             }
