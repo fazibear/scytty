@@ -439,7 +439,8 @@ pub fn run() -> Result<()> {
                         client.send(snapshot(tab)?)?;
                     }
                     if let Some(previous) = session.client.take() {
-                        let _ = previous.send(Update::Error("This window was disconnected because the session was connected in another window. Your tabs and shells are still running.".into()));
+                        let _ =
+                            previous.send(Update::Error(protocol::SESSION_REPLACED_ERROR.into()));
                     }
                     session.client = Some(client);
                     session.state();

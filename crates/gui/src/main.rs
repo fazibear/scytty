@@ -528,8 +528,8 @@ impl Gui {
                     self.update_native_progress(window, false, cx);
                 }
                 Update::Error(message) => {
-                    self.disconnect();
-                    anyhow::bail!(message);
+                    self.connection_failed(anyhow::anyhow!(message), cx);
+                    return Ok(());
                 }
             }
         }

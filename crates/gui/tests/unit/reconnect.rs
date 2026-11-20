@@ -21,6 +21,12 @@ fn retries_connection_loss_but_not_invalid_data_or_application_errors() {
         anyhow::Error::from(io::Error::from(io::ErrorKind::UnexpectedEof)).context("frame failed");
     assert!(transport_error(&error));
     assert!(!transport_error(&anyhow::anyhow!("Session rejected")));
+    for message in [
+        scytty_common::protocol::SESSION_ATTACHED_ERROR,
+        scytty_common::protocol::SESSION_REPLACED_ERROR,
+    ] {
+        assert!(!transport_error(&anyhow::anyhow!(message)), "{message}");
+    }
     assert!(!transport_error(&anyhow::Error::from(io::Error::from(
         io::ErrorKind::InvalidData
     ))));

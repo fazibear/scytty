@@ -232,7 +232,7 @@ fn tabs_and_reattach() -> Result<()> {
     assert_eq!(state(&mut replacement)?, (vec![first], first));
     loop {
         if let Update::Error(message) = protocol::receive(&mut stream)? {
-            assert!(message.contains("another window"));
+            assert_eq!(message, protocol::SESSION_REPLACED_ERROR);
             break;
         }
     }

@@ -700,19 +700,33 @@ impl Gui {
                             .object_fit(ObjectFit::Contain),
                     )
                     .when(
-                        self.error.as_deref() == Some(protocol::SESSION_ATTACHED_ERROR),
+                        matches!(
+                            self.error.as_deref(),
+                            Some(
+                                protocol::SESSION_ATTACHED_ERROR | protocol::SESSION_REPLACED_ERROR
+                            )
+                        ),
                         |screen| {
                             screen.child(
-                                error_button(
-                                    "take-over-session",
-                                    "Disconnect previous and connect",
-                                )
-                                .mt(px(8.))
-                                .on_click(cx.listener(
-                                    |this, _, _, cx| {
-                                        this.start_connect_choice(None, None, true, cx);
-                                    },
-                                )),
+                                div()
+                                    .flex()
+                                    .flex_wrap()
+                                    .gap(px(8.))
+                                    .mt(px(8.))
+                                    .child(error_button("reconnect-session", "Reconnect").on_click(
+                                        cx.listener(|this, _, _, cx| this.start_connect(None, cx)),
+                                    ))
+                                    .child(
+                                        error_button(
+                                            "take-over-session",
+                                            "Disconnect previous and connect",
+                                        )
+                                        .on_click(
+                                            cx.listener(|this, _, _, cx| {
+                                                this.start_connect_choice(None, None, true, cx)
+                                            }),
+                                        ),
+                                    ),
                             )
                         },
                     )

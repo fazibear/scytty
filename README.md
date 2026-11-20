@@ -63,7 +63,10 @@ connection failures, rejected sessions, and incompatible servers still show an e
 reconnect never approves a daemon restart or takes over another attached window.
 For an already-attached session, **Disconnect previous and connect** explicitly
 transfers it to this window without ending its tabs or shells. The previous window
-shows a disconnection message instead of automatically taking the session back.
+shows a disconnection message and cancels automatic reconnect. It offers
+**Reconnect** (normal attachment, only if available) and **Disconnect previous and
+connect** (explicit takeover). An already-attached rejection offers the same
+buttons and stops retries; clients never automatically take the session back.
 This requires protocol 8 on both client and server. Upgrade/restart the daemon only
 when safe: restarting the server ends existing sessions.
 A normal disconnect releases the session's attachment immediately. Clients send

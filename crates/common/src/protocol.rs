@@ -10,6 +10,7 @@ pub const HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_se
 pub const CLIENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 pub const SESSION_ATTACHED_ERROR: &str =
     "Session is already attached to another window; close it before reattaching";
+pub const SESSION_REPLACED_ERROR: &str = "This window was disconnected because the session was connected in another window. Your tabs and shells are still running.";
 const MAGIC: &[u8; 8] = b"SCYTTY\r\n";
 
 /// Fixed preamble: both peers write before reading, independent of frame encoding.
