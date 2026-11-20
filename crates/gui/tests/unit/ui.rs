@@ -1,6 +1,16 @@
 use super::*;
 use core::prelude::v1::test;
 #[test]
+fn tab_width_limit_uses_stable_window_space() {
+    for count in [1, 2, 3, 10] {
+        assert_eq!(tab_width_limit(15., px(2234.), count), px(240.));
+    }
+    assert_eq!(tab_width_limit(15., px(300.), 3), px(100.));
+    assert_eq!(tab_width_limit(15., px(300.), 1), px(240.));
+    assert_eq!(tab_width_limit(15., px(0.), 0), px(240.));
+}
+
+#[test]
 fn tab_overflow_tracks_clipped_sides_and_nearest_hidden_tab() {
     let viewport = Bounds::new(point(px(50.), px(10.)), size(px(100.), px(28.)));
     let tabs = || {

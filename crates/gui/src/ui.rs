@@ -12,6 +12,15 @@ fn message_line_rows(line: &str, breaks: impl Iterator<Item = usize>) -> Vec<Str
         .collect()
 }
 
+fn tab_width_limit(font_size: f32, window_width: Pixels, tab_count: usize) -> Pixels {
+    let limit = px(font_size * 16.);
+    if window_width > px(0.) {
+        limit.min(window_width / tab_count.clamp(1, 3) as f32)
+    } else {
+        limit
+    }
+}
+
 fn hidden_tabs(
     viewport: Bounds<Pixels>,
     offset: Pixels,
@@ -353,12 +362,12 @@ impl Gui {
     pub(super) fn header(&self, window: &mut Window, cx: &mut Context<Self>) -> Result<AnyElement> {
         let active = self.order.iter().find(|t| t.id == self.active);
         let width = self.tab_scroll.bounds().size.width;
-        let max_tab_width = px(self.config.font_size * 16.);
-        let max_tab_width = if width > px(0.) {
-            max_tab_width.min(width / self.order.len().clamp(1, 3) as f32)
-        } else {
-            max_tab_width
-        };
+        // The strip is content-sized; using its width here repeatedly shrinks longer titles.
+        let max_tab_width = tab_width_limit(
+            self.config.font_size,
+            window.viewport_size().width,
+            self.order.len(),
+        );
         if width > px(0.)
             && let Some(index) = self.order.iter().position(|tab| tab.id == self.active)
         {
