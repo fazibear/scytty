@@ -2,7 +2,11 @@ use anyhow::{Context, Result, bail};
 use std::{
     io,
     process::{Child, Command, Stdio},
-    sync::mpsc::{self, Receiver},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, Receiver},
+    },
     thread,
     time::Duration,
 };
@@ -17,6 +21,7 @@ pub struct Connected {
     pub writer: Stream,
     pub updates: Receiver<Result<Update>>,
     pub wakeups: async_channel::Receiver<()>,
+    pub activity: Arc<AtomicBool>,
 }
 
 pub fn connect_session(
@@ -67,9 +72,17 @@ pub fn attach(
     let mut reader = writer.try_clone()?;
     let (tx, updates) = mpsc::sync_channel(256);
     let (wake, wakeups) = async_channel::bounded(1);
+    let activity = Arc::new(AtomicBool::new(true));
+    let reader_activity = activity.clone();
     thread::spawn(move || {
         loop {
             let update = protocol::receive(&mut reader).context("Server connection closed or sent an incomplete frame; check SSH output and ~/.scytty/server.log on the server");
+            if update.is_ok() {
+                reader_activity.store(true, Ordering::Relaxed);
+            }
+            if matches!(&update, Ok(Update::Pong)) {
+                continue;
+            }
             let failed = update.is_err();
             if tx.send(update).is_err() {
                 break;
@@ -85,6 +98,7 @@ pub fn attach(
         writer,
         updates,
         wakeups,
+        activity,
     })
 }
 

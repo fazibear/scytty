@@ -64,8 +64,13 @@ reconnect never approves a daemon restart or takes over another attached window.
 For an already-attached session, **Disconnect previous and connect** explicitly
 transfers it to this window without ending its tabs or shells. The previous window
 shows a disconnection message instead of automatically taking the session back.
-This requires protocol 7 on both client and server. Upgrade/restart the daemon only
+This requires protocol 8 on both client and server. Upgrade/restart the daemon only
 when safe: restarting the server ends existing sessions.
+A normal disconnect releases the session's attachment immediately. Clients send
+heartbeats every 10 seconds; after about 30 seconds without client traffic, the
+server releases a stale attachment while preserving its tabs and shells. The GUI
+also reconnects if server replies stop for 30 seconds. Suspending a client longer
+than this can detach it; background/minimized windows still send heartbeats.
 The socket and server log live in `~/.scytty`. Sessions do not survive server restart;
 if the session no longer exists, reattachment creates a new shell.
 
@@ -484,7 +489,8 @@ Use an SSH agent or authenticate from the launching terminal. No TCP listener
 or exposed server port is needed. The remote server starts automatically.
 
 Closing the window or losing SSH detaches without killing remote shells.
-Run the same command to reattach; automatic reconnect is not implemented.
+The GUI automatically retries a lost connection. Run the same command to reattach
+from a new window.
 A fixed startup handshake checks protocol versions before any session frames
 are decoded, locally and over SSH. Incompatible or pre-handshake peers produce
 an explicit update/restart error rather than attempting to decode session data.

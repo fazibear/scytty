@@ -157,6 +157,23 @@ fn error_output(event: &Event, sessions: &HashMap<String, Session>) -> Option<Sy
     client.map(|client| client.output.clone())
 }
 
+fn read_requests(mut stream: Stream, id: u64, tx: SyncSender<Event>) {
+    loop {
+        match protocol::receive(&mut stream) {
+            Ok(request) => {
+                if tx.send(Event::Request(id, request)).is_err() {
+                    break;
+                }
+            }
+            Err(error) => {
+                eprintln!("client {id}: request stream ended: {error:#}");
+                break;
+            }
+        }
+    }
+    let _ = tx.send(Event::Detached(id));
+}
+
 fn tab_cwd(tab: &Tab) -> Option<std::path::PathBuf> {
     if tab.exited {
         return None;
@@ -320,7 +337,12 @@ pub fn run() -> Result<()> {
                     let _ = protocol::send(&mut stream, &Update::Error(error.to_string()));
                     return;
                 }
-                let _ = stream.set_read_timeout(None);
+                if stream
+                    .set_read_timeout(Some(protocol::CLIENT_TIMEOUT))
+                    .is_err()
+                {
+                    return;
+                }
                 let Ok(mut writer) = stream.try_clone() else {
                     return;
                 };
@@ -340,6 +362,7 @@ pub fn run() -> Result<()> {
                 {
                     return;
                 }
+                let writer_events = tx.clone();
                 thread::spawn(move || {
                     for update in updates {
                         if let Err(error) = protocol::send(&mut writer, &update) {
@@ -348,21 +371,9 @@ pub fn run() -> Result<()> {
                         }
                     }
                     let _ = writer.shutdown(std::net::Shutdown::Both);
+                    let _ = writer_events.send(Event::Detached(id as u64));
                 });
-                loop {
-                    match protocol::receive(&mut stream) {
-                        Ok(request) => {
-                            if tx.send(Event::Request(id as u64, request)).is_err() {
-                                break;
-                            }
-                        }
-                        Err(error) => {
-                            eprintln!("client {id}: request stream ended: {error:#}");
-                            break;
-                        }
-                    }
-                }
-                let _ = tx.send(Event::Detached(id as u64));
+                read_requests(stream, id as u64, tx);
             });
         }
     });
@@ -497,6 +508,7 @@ pub fn run() -> Result<()> {
                         return Ok(());
                     };
                     match request {
+                        Request::Ping => session.emit(Update::Pong),
                         Request::SetScrollback { megabytes } => {
                             if megabytes > 64 {
                                 bail!("scrollback_mb must be between 0 and 64");

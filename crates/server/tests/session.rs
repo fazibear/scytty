@@ -101,6 +101,14 @@ fn tabs_and_reattach() -> Result<()> {
     )?;
     let (tabs, first) = state(&mut stream)?;
     assert_eq!(tabs, [first]);
+    protocol::send(&mut stream, &Request::Ping)?;
+    loop {
+        match protocol::receive(&mut stream)? {
+            Update::Pong => break,
+            Update::Error(message) => bail!(message),
+            _ => {}
+        }
+    }
     // A rejected request belongs to this window, not every attached session.
     let mut unrelated = UnixStream::connect(&path)?;
     unrelated.set_read_timeout(Some(Duration::from_secs(5)))?;

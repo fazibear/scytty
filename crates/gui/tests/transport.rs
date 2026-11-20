@@ -119,6 +119,44 @@ mod transport {
         Ok(())
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn heartbeats_track_activity_without_ui_updates() -> Result<()> {
+        let (socket, mut server) = stream::pair()?;
+        let connection = Connection {
+            socket,
+            child: Command::new("/bin/sleep").arg("30").spawn()?,
+        };
+        let (begin, start) = mpsc::channel();
+        let (finish, done) = mpsc::channel();
+        let peer = thread::spawn(move || -> Result<()> {
+            protocol::handshake(&mut server)?;
+            assert!(matches!(
+                protocol::receive::<Request>(&mut server)?,
+                Request::Attach { .. }
+            ));
+            start.recv()?;
+            protocol::send(&mut server, &Update::Pong)?;
+            done.recv()?;
+            Ok(())
+        });
+        let connected = attach(connection, "test".into(), None, false)?;
+        connected.activity.store(false, Ordering::Relaxed);
+        begin.send(())?;
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !connected.activity.load(Ordering::Relaxed) && std::time::Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert!(connected.activity.load(Ordering::Relaxed));
+        assert!(matches!(
+            connected.updates.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        finish.send(())?;
+        peer.join().expect("heartbeat peer panicked")?;
+        Ok(())
+    }
+
     #[test]
     fn ssh_destinations() {
         for host in ["user@host", "my-server", "user@::1"] {

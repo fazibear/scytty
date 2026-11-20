@@ -1,6 +1,30 @@
 use super::*;
 
 #[test]
+fn idle_timeout_and_eof_both_release_the_client() -> Result<()> {
+    for disconnect in [false, true] {
+        let (server, mut client) = scytty_common::stream::pair()?;
+        server.set_read_timeout(Some(Duration::from_millis(25)))?;
+        let (tx, events) = mpsc::sync_channel(4);
+        let reader = thread::spawn(move || read_requests(server, 42, tx));
+        protocol::send(&mut client, &Request::Ping)?;
+        assert!(matches!(
+            events.recv_timeout(Duration::from_secs(5))?,
+            Event::Request(42, Request::Ping)
+        ));
+        if disconnect {
+            client.shutdown(std::net::Shutdown::Both)?;
+        }
+        assert!(matches!(
+            events.recv_timeout(Duration::from_secs(5))?,
+            Event::Detached(42)
+        ));
+        reader.join().expect("client reader panicked");
+    }
+    Ok(())
+}
+
+#[test]
 fn pty_pixel_geometry_uses_total_dimensions_and_saturates() {
     let size = pty_size(80, 24, 9, 18);
     assert_eq!(

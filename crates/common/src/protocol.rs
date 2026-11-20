@@ -5,7 +5,9 @@ use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 
 // Bump whenever messages or the Ghostty snapshot format become incompatible.
-pub const PROTOCOL_VERSION: u32 = 7;
+pub const PROTOCOL_VERSION: u32 = 8;
+pub const HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+pub const CLIENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 pub const SESSION_ATTACHED_ERROR: &str =
     "Session is already attached to another window; close it before reattaching";
 const MAGIC: &[u8; 8] = b"SCYTTY\r\n";
@@ -46,6 +48,7 @@ pub fn validate_bin(bin: &str) -> Result<()> {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Request {
+    Ping,
     Attach {
         session: String,
         bin: Option<String>,
@@ -104,6 +107,7 @@ pub struct TabInfo {
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Update {
+    Pong,
     State {
         tabs: Vec<TabInfo>,
         active: u64,

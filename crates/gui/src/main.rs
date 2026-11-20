@@ -14,7 +14,11 @@ use scytty_common::{
 use std::{
     collections::HashMap,
     ops::Range,
-    sync::mpsc::{self, Receiver},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, Receiver},
+    },
     time::{Duration, Instant},
 };
 mod ansi;
@@ -74,6 +78,8 @@ struct Gui {
     has_connected: bool,
     reconnect: Option<reconnect::Reconnect>,
     writer: Option<Stream>,
+    last_server_update: Instant,
+    server_activity: Option<Arc<AtomicBool>>,
     updates: Option<Receiver<Result<Update>>>,
     window_bounds: Option<WindowBounds>,
     tabs: HashMap<u64, Tab>,
@@ -130,6 +136,8 @@ impl Gui {
             has_connected: false,
             reconnect: None,
             writer: None,
+            last_server_update: Instant::now(),
+            server_activity: None,
             updates: None,
             window_bounds: None,
             tabs: HashMap::new(),
@@ -162,6 +170,7 @@ impl Gui {
         }
         cx.spawn(async move |view, cx| {
             let mut status_tick = false;
+            let mut last_heartbeat = Instant::now();
             loop {
                 cx.background_executor()
                     .timer(Duration::from_millis(500))
@@ -169,6 +178,31 @@ impl Gui {
                 status_tick = !status_tick;
                 if view
                     .update(cx, |view, cx| {
+                        if view
+                            .server_activity
+                            .as_ref()
+                            .is_some_and(|activity| activity.swap(false, Ordering::Relaxed))
+                        {
+                            view.last_server_update = Instant::now();
+                        }
+                        if view.writer.is_some() {
+                            if view.last_server_update.elapsed() >= protocol::CLIENT_TIMEOUT {
+                                view.report(
+                                    Err(std::io::Error::new(
+                                        std::io::ErrorKind::TimedOut,
+                                        "Server stopped responding to heartbeats",
+                                    )
+                                    .into()),
+                                    cx,
+                                );
+                            } else if !view.connecting
+                                && last_heartbeat.elapsed() >= protocol::HEARTBEAT_INTERVAL
+                            {
+                                last_heartbeat = Instant::now();
+                                let result = view.request(Request::Ping);
+                                view.report(result, cx);
+                            }
+                        }
                         if status_tick
                             && view
                                 .reconnect
@@ -232,6 +266,8 @@ impl Gui {
             let _ = view.update(cx, |view, cx| {
                 match result {
                     Ok(connected) => {
+                        view.last_server_update = Instant::now();
+                        view.server_activity = Some(connected.activity);
                         view.connection = Some(connected.connection);
                         view.writer = Some(connected.writer);
                         view.updates = Some(connected.updates);
@@ -326,6 +362,7 @@ impl Gui {
         self.keyboard.clear();
         self.updates = None;
         self.writer = None;
+        self.server_activity = None;
         self.connection = None;
     }
     fn retry_connection(&mut self, cx: &mut Context<Self>) {
@@ -413,6 +450,7 @@ impl Gui {
                 }
             };
             match update {
+                Update::Pong => {}
                 Update::Snapshot { id, bytes } => {
                     let mut terminal =
                         ghostty_vt::snapshot::Decoder::from_slice(&bytes).decode()?;
