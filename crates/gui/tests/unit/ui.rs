@@ -46,30 +46,109 @@ fn selected_tab_keeps_neighboring_tabs_visible() {
     let viewport = bounds(50., 120.);
     // Active is the middle of the three 40px tabs, initially at the right edge.
     assert_eq!(
-        tab_group_offset(viewport, px(0.), bounds(130., 40.), bounds(210., 40.)),
+        tab_group_offset(
+            viewport,
+            px(0.),
+            bounds(130., 40.),
+            bounds(170., 40.),
+            bounds(210., 40.)
+        ),
         px(-80.)
     );
     // The same group at the left edge must reveal its predecessor.
     assert_eq!(
-        tab_group_offset(viewport, px(-120.), bounds(130., 40.), bounds(210., 40.)),
+        tab_group_offset(
+            viewport,
+            px(-120.),
+            bounds(130., 40.),
+            bounds(170., 40.),
+            bounds(210., 40.)
+        ),
         px(-80.)
     );
     assert_eq!(
-        tab_group_offset(viewport, px(-80.), bounds(130., 40.), bounds(210., 40.)),
+        tab_group_offset(
+            viewport,
+            px(-80.),
+            bounds(130., 40.),
+            bounds(170., 40.),
+            bounds(210., 40.)
+        ),
         px(-80.)
     );
     // First/last selected tabs only need their one existing neighbor.
     assert_eq!(
-        tab_group_offset(viewport, px(-40.), bounds(50., 40.), bounds(90., 40.)),
+        tab_group_offset(
+            viewport,
+            px(-40.),
+            bounds(50., 40.),
+            bounds(50., 40.),
+            bounds(90., 40.)
+        ),
         px(0.)
     );
     assert_eq!(
-        tab_group_offset(viewport, px(0.), bounds(170., 40.), bounds(210., 40.)),
+        tab_group_offset(
+            viewport,
+            px(0.),
+            bounds(170., 40.),
+            bounds(210., 40.),
+            bounds(210., 40.)
+        ),
         px(-80.)
     );
     // A stale pre-resize layout must not alternate between opposite edges.
     assert_eq!(
-        tab_group_offset(viewport, px(-40.), bounds(50., 80.), bounds(210., 80.)),
+        tab_group_offset(
+            viewport,
+            px(-40.),
+            bounds(50., 80.),
+            bounds(130., 80.),
+            bounds(210., 80.)
+        ),
+        px(-40.)
+    );
+}
+
+#[test]
+fn indicators_and_scroll_offset_settle_after_viewport_moves() {
+    let mut offset = px(0.);
+    for (origin, width, selected) in [
+        (50., 120., 9usize),
+        (80., 90., 9),
+        (80., 90., 9),
+        (50., 120., 0),
+        (50., 90., 0),
+        (50., 90., 0),
+    ] {
+        let viewport = Bounds::new(point(px(origin), px(0.)), size(px(width), px(28.)));
+        let tab = |index: usize| {
+            Bounds::new(
+                point(px(origin + index as f32 * 40.), px(0.)),
+                size(px(40.), px(28.)),
+            )
+        };
+        let first = tab(selected.saturating_sub(1));
+        let active = tab(selected);
+        let last = tab((selected + 1).min(9));
+        offset = tab_group_offset(viewport, offset, first, active, last);
+        assert_eq!(
+            tab_group_offset(viewport, offset, first, active, last),
+            offset
+        );
+        let (left, right) = hidden_tabs(viewport, offset, (0..10).map(|i| (i, tab(i))));
+        assert_eq!(left.is_some(), selected != 0);
+        assert_eq!(right.is_some(), selected != 9);
+    }
+    // If even a single tab cannot fit, keep its leading edge stable.
+    let viewport = Bounds::new(point(px(50.), px(0.)), size(px(30.), px(28.)));
+    let active = Bounds::new(point(px(90.), px(0.)), size(px(40.), px(28.)));
+    assert_eq!(
+        tab_group_offset(viewport, px(0.), active, active, active),
+        px(-40.)
+    );
+    assert_eq!(
+        tab_group_offset(viewport, px(-40.), active, active, active),
         px(-40.)
     );
 }

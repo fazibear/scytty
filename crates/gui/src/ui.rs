@@ -43,10 +43,16 @@ fn tab_group_offset(
     viewport: Bounds<Pixels>,
     offset: Pixels,
     first: Bounds<Pixels>,
+    active: Bounds<Pixels>,
     last: Bounds<Pixels>,
 ) -> Pixels {
-    if last.right() - first.left() > viewport.size.width + px(0.5) {
-        return offset;
+    let (first, last) = if last.right() - first.left() > viewport.size.width + px(0.5) {
+        (active, active)
+    } else {
+        (first, last)
+    };
+    if first.size.width > viewport.size.width {
+        return viewport.left() - first.left();
     }
     if first.left() + offset < viewport.left() {
         viewport.left() - first.left()
@@ -368,22 +374,19 @@ impl Gui {
             window.viewport_size().width,
             self.order.len(),
         );
-        if width > px(0.)
-            && let Some(index) = self.order.iter().position(|tab| tab.id == self.active)
-        {
-            self.tab_scroll.scroll_to_item(index);
-        }
         cx.on_next_frame(window, move |this, _, cx| {
             let viewport = this.tab_scroll.bounds();
             let mut offset = this.tab_scroll.offset();
             let previous_offset = offset.x;
             if let Some(index) = this.order.iter().position(|tab| tab.id == this.active)
+                && let Some(active) = this.tab_scroll.bounds_for_item(index)
                 && let Some(first) = this.tab_scroll.bounds_for_item(index.saturating_sub(1))
                 && let Some(last) = this
                     .tab_scroll
                     .bounds_for_item((index + 1).min(this.order.len() - 1))
             {
-                offset.x = tab_group_offset(viewport, offset.x, first, last);
+                // Scroll only after layout: indicator changes move the viewport between frames.
+                offset.x = tab_group_offset(viewport, offset.x, first, active, last);
             }
             let scrolled = f32::from(offset.x - previous_offset).abs() > 0.5;
             if scrolled {
