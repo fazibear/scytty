@@ -29,8 +29,16 @@ runtime, so the optional Metal compiler toolchain is not required.
 ```sh
 cargo build --release --workspace  # build GUI and server
 cargo run -p scytty --release         # create or attach the "default" session
-cargo run -p scytty --release -- work # create or reattach named session
+cargo run -p scytty --release -- connect --session work # create or reattach named session
 ```
+
+CLI: `scytty connect [--host HOST] [--session NAME] [--bin EXECUTABLE]`.
+Omit `--host` for a local connection and `--session` for `default`. Bare `scytty`
+opens the default local session. `--bin` selects the executable for a new session,
+not a shell command or argument list; quote paths containing spaces. Existing
+sessions keep their program; an explicit different `--bin` is rejected.
+Use `scytty --help` for usage. The old `--ssh` and positional-session forms have
+been replaced by `connect` and named options.
 
 Locally, the GUI launches `scytty-server --stdio` from beside the GUI executable
 or PATH, using the same stdio bridge as SSH. The bridge connects to the private
@@ -68,7 +76,7 @@ Install and select a Nerd Font to display the status bar's icons.
 
 ```sh
 just build          # release GUI + local/embedded remote servers; macOS also creates target/release/Scytty.app
-just run            # build and launch GUI without installing; accepts session / --ssh arguments
+just run            # build and launch GUI without installing; accepts connect --host / --session / --bin arguments
 just install        # build and copy the macOS app to ~/Applications
 just build-server   # native release server only
 just build-servers  # bundle Linux x86_64/ARM64; on macOS, also macOS ARM64/x86_64
@@ -109,7 +117,7 @@ explicitly allowed in System Settings.
 
 On Windows 10 version 1809 or later, extract both executables into the same
 folder and run `scytty.exe` for a local session. The server starts automatically
-and sessions survive closing the GUI. Run `scytty.exe --ssh user@host [session]`
+and sessions survive closing the GUI. Run `scytty.exe connect --host user@host --session work`
 for remote Unix sessions; OpenSSH (`ssh.exe`) must be on PATH, with no manual
 remote server installation needed. Both desktop archives embed all four
 remote server variants. To build locally, use Rust, Zig and the MSVC build tools;
@@ -443,9 +451,9 @@ supports only remote macOS/Linux hosts.
 Use an official desktop release or `just build`, then connect:
 
 ```sh
-scytty --ssh user@host work
+scytty connect --host user@host --session work --bin /usr/bin/fish
 # From source (builds the embedded payloads first):
-just run --ssh user@host work
+just run connect --host user@host --session work
 ```
 
 Scytty detects the remote OS/architecture and uploads its embedded matching

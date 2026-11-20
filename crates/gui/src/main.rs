@@ -19,6 +19,7 @@ use std::{
 };
 mod ansi;
 mod bidi;
+mod cli;
 mod clipboard;
 mod config;
 mod cursor;
@@ -1706,22 +1707,13 @@ fn open_window(
 }
 
 fn main() -> Result<()> {
-    let config = Config::load()?;
-    let mut args = std::env::args().skip(1);
-    let argument = args.next();
-    let (host, session) = if argument.as_deref() == Some("--ssh") {
-        (
-            Some(
-                args.next()
-                    .context("usage: scytty --ssh user@host [session]")?,
-            ),
-            args.next().unwrap_or_else(|| "default".into()),
-        )
-    } else {
-        (None, argument.unwrap_or_else(|| "default".into()))
+    let Some(cli::Options { host, session, bin }) = cli::parse(std::env::args().skip(1))? else {
+        println!("{}", cli::HELP);
+        return Ok(());
     };
+    let config = Config::load()?;
     Application::new().run(move |cx| {
-        if let Err(e) = open_window(config, session, host, None, cx) {
+        if let Err(e) = open_window(config, session, host, bin, cx) {
             eprintln!("Cannot open Scytty: {e:#}");
             cx.quit();
         }
