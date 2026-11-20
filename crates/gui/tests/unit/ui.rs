@@ -41,6 +41,23 @@ fn tab_overflow_tracks_clipped_sides_and_nearest_hidden_tab() {
 }
 
 #[test]
+fn windows_fractional_edges_do_not_toggle_overflow_indicators() {
+    for (origin, width, first) in [(26.666666, 192., 26.), (52.666668, 192.66667, 52.66666)] {
+        let viewport = Bounds::new(point(px(origin), px(4.)), size(px(width), px(28.)));
+        let tabs = [(
+            0,
+            Bounds::new(point(px(first), px(4.)), size(px(width), px(28.))),
+        )];
+        assert_eq!(
+            hidden_tabs(viewport, px(0.), tabs.into_iter()),
+            (None, None)
+        );
+        assert_eq!(hidden_tabs(viewport, px(-2.), tabs.into_iter()).0, Some(0));
+        assert_eq!(hidden_tabs(viewport, px(2.), tabs.into_iter()).1, Some(0));
+    }
+}
+
+#[test]
 fn selected_tab_keeps_neighboring_tabs_visible() {
     let bounds = |x, width| Bounds::new(point(px(x), px(0.)), size(px(width), px(28.)));
     let viewport = bounds(50., 120.);

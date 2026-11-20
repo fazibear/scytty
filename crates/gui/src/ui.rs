@@ -29,10 +29,11 @@ fn hidden_tabs(
     let mut left = None;
     let mut right = None;
     for (index, bounds) in tabs {
-        if bounds.left() + offset < viewport.left() - px(0.5) {
+        // Windows pixel snapping can move child edges by up to one logical pixel.
+        if bounds.left() + offset < viewport.left() - px(1.) {
             left = Some(index);
         }
-        if right.is_none() && bounds.right() + offset > viewport.right() + px(0.5) {
+        if right.is_none() && bounds.right() + offset > viewport.right() + px(1.) {
             right = Some(index);
         }
     }
