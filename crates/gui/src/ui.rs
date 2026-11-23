@@ -106,17 +106,97 @@ impl Gui {
         &self,
         segments: Vec<(String, Option<Rgba>)>,
         font_size: f32,
-        _line_height: Pixels,
+        line_height: Pixels,
     ) -> Div {
+        use unicode_segmentation::UnicodeSegmentation;
         let mut line = div().flex().items_center().flex_shrink_0();
         for (text, color) in status_runs(segments) {
-            line = line.child(
+            let color = color.unwrap_or(rgb(0xc6d0f5));
+            let plain = |text: String| {
                 div()
                     .flex_shrink_0()
                     .text_size(px(font_size))
-                    .text_color(color.unwrap_or(rgb(0xc6d0f5)))
-                    .child(text),
-            );
+                    .text_color(color)
+                    .child(text)
+            };
+            let mut graphemes = text.graphemes(true).peekable();
+            let mut pending = String::new();
+            while let Some(text) = graphemes.next() {
+                let Some(ch) = terminal_paint::centered_symbol(text) else {
+                    pending.push_str(text);
+                    continue;
+                };
+                if !pending.is_empty() {
+                    line = line.child(plain(std::mem::take(&mut pending)));
+                }
+                let columns = if graphemes.peek() == Some(&" ") {
+                    graphemes.next();
+                    2.
+                } else {
+                    1.
+                };
+                let cell_width = self.cell.width * (font_size / self.config.font_size);
+                let width = cell_width * columns;
+                let font = self.config.font();
+                let text = text.to_owned();
+                line = line.child(
+                    canvas(
+                        |_, _, _| (),
+                        move |bounds, _, window, cx| {
+                            let run = TextRun {
+                                len: text.len(),
+                                font: font.clone(),
+                                color: color.into(),
+                                background_color: None,
+                                underline: None,
+                                strikethrough: None,
+                            };
+                            let mut shaped = window.text_system().shape_line(
+                                text.clone().into(),
+                                px(font_size),
+                                std::slice::from_ref(&run),
+                                None,
+                            );
+                            let fit = (f32::from(width) / f32::from(shaped.width)).min(1.);
+                            if fit < 1. {
+                                shaped = window.text_system().shape_line(
+                                    text.clone().into(),
+                                    px(font_size * fit),
+                                    &[run],
+                                    None,
+                                );
+                            }
+                            let available =
+                                size(cell_width.max(shaped.width).min(width), line_height);
+                            let baseline =
+                                (line_height - shaped.ascent - shaped.descent) / 2. + shaped.ascent;
+                            let offset = shaped
+                                .runs
+                                .first()
+                                .and_then(|run| {
+                                    window
+                                        .text_system()
+                                        .typographic_bounds(run.font_id, px(font_size * fit), ch)
+                                        .ok()
+                                })
+                                .map(|ink| {
+                                    terminal_paint::centered_origin(available, ink, baseline)
+                                })
+                                .unwrap_or_default();
+                            window.with_content_mask(Some(ContentMask { bounds }), |window| {
+                                let _ =
+                                    shaped.paint(bounds.origin + offset, line_height, window, cx);
+                            });
+                        },
+                    )
+                    .w(width)
+                    .h(line_height)
+                    .flex_shrink_0(),
+                );
+            }
+            if !pending.is_empty() {
+                line = line.child(plain(pending));
+            }
         }
         line
     }
@@ -212,10 +292,35 @@ impl Gui {
                         underline: None,
                         strikethrough: None,
                     };
-                    window
-                        .text_system()
-                        .shape_line(entry.label.clone().into(), px(14.), &[run], None)
-                        .width
+                    use unicode_segmentation::UnicodeSegmentation;
+                    let mut width = px(0.);
+                    let mut pending = String::new();
+                    let mut chars = entry.label.graphemes(true).peekable();
+                    let measure = |text: String, window: &Window| {
+                        let run = TextRun {
+                            len: text.len(),
+                            ..run.clone()
+                        };
+                        window
+                            .text_system()
+                            .shape_line(text.into(), px(14.), &[run], None)
+                            .width
+                    };
+                    while let Some(text) = chars.next() {
+                        if terminal_paint::centered_symbol(text).is_some() {
+                            width += measure(std::mem::take(&mut pending), window);
+                            let columns = if chars.peek() == Some(&" ") {
+                                chars.next();
+                                2.
+                            } else {
+                                1.
+                            };
+                            width += self.cell.width * (14. / self.config.font_size) * columns;
+                        } else {
+                            pending.push_str(text);
+                        }
+                    }
+                    width + measure(pending, window)
                 }),
             window.viewport_size().width,
         );

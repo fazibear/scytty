@@ -84,7 +84,8 @@ otherwise oversized glyphs shrink to fit without covering text. Terminal renderi
 has no Nerd-specific enlargement. Standalone Unicode symbols and private-use
 glyphs are centered using their font ink bounds, even without a following space.
 Letters, combining sequences, box/block drawing, Braille, and Powerline separators
-keep normal alignment. UI symbols use natural font shaping. `icon_scale` is accepted for config compatibility but has no effect.
+keep normal alignment. Tab-bar, status, and menu symbols share the terminal's ink-bound centering and
+fit-to-available-cells logic. `icon_scale` is accepted for config compatibility but has no effect.
 
 ## Just commands
 
@@ -197,8 +198,9 @@ new_tab_button = {text = "＋", color = "#a6e3a1"},
 Defaults are `<`, `>`, and `+` with inherited text color. Each setting accepts a
 plain string or `{text = "…", color = "#RRGGBB"}`; color is optional. Text must be
 nonempty and single-line. Unicode symbols depend on your installed font.
-Symbols use natural font shaping at the label's text size, without Nerd-specific
-scaling or centering. Spaces are preserved, including in menu-entry labels.
+Symbols use the terminal's generic ink-bound centering at the label's text size,
+without Nerd-specific scaling. A following space provides an additional cell of
+room; ordinary text retains baseline alignment.
 Hidden indicators take no space. Tab formatting and button actions are unchanged.
 It occupies the titlebar area beside the native macOS window buttons; drag empty
 bar space to move the window. The native title text is hidden.

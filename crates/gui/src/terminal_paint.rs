@@ -1,7 +1,7 @@
 use crate::Cell;
 use unicode_properties::{GeneralCategory, UnicodeGeneralCategory};
 
-fn centered_symbol(text: &str) -> Option<char> {
+pub(super) fn centered_symbol(text: &str) -> Option<char> {
     let mut chars = text.chars();
     let ch = chars.next()?;
     if chars.next().is_some()
@@ -16,7 +16,11 @@ fn centered_symbol(text: &str) -> Option<char> {
     .then_some(ch)
 }
 
-fn centered_origin(cell: Size<Pixels>, ink: Bounds<Pixels>, baseline: Pixels) -> Point<Pixels> {
+pub(super) fn centered_origin(
+    cell: Size<Pixels>,
+    ink: Bounds<Pixels>,
+    baseline: Pixels,
+) -> Point<Pixels> {
     point(
         (cell.width - ink.size.width) / 2. - ink.origin.x,
         // Font bounds are Y-up from the baseline; painting coordinates are Y-down.
