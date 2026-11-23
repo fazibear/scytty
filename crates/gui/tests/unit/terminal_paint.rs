@@ -124,7 +124,10 @@ fn overhang_only_covers_contiguous_blank_single_width_cells() {
 
     let mut wide_tail = cell(1, "");
     wide_tail.width = 0;
-    assert_eq!(overhang_columns(&[cell(0, "⚠"), wide_tail, cell(2, " ")], 1), 0);
+    assert_eq!(
+        overhang_columns(&[cell(0, "⚠"), wide_tail, cell(2, " ")], 1),
+        0
+    );
 
     let mut wide_head = cell(1, "😀");
     wide_head.width = 2;
@@ -132,7 +135,10 @@ fn overhang_only_covers_contiguous_blank_single_width_cells() {
 
     let mut invisible_wide = cell(1, "");
     invisible_wide.width = 2;
-    assert_eq!(overhang_columns(&[cell(0, "➜"), invisible_wide, cell(2, " ")], 1), 0);
+    assert_eq!(
+        overhang_columns(&[cell(0, "➜"), invisible_wide, cell(2, " ")], 1),
+        0
+    );
 
     let mut gap = cell(3, " ");
     gap.x = 3;

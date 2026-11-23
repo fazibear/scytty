@@ -153,7 +153,13 @@ See `config.example.lua`. Missing options use defaults; unknown options and
 invalid values are errors. Config applies to terminal and tab-bar fonts.
 Set `font_family = "Menlo"` (or another installed family name) to select a font.
 The default `"monospace"` selects the system monospace family. The regular face
-is used; unknown families produce a startup error. No bundled glyph fallback is
+is used; unknown primary families fall back to the system monospace font.
+`font_family` also accepts an ordered glyph-fallback array, for example
+`font_family = {"Menlo", "FiraCode Nerd Font Mono"}`. The first family sets the
+terminal metrics; later families are passed to GPUI's native shaper for missing
+glyphs, including icons, in both terminal text and the UI. Native fallback support
+is platform-dependent. This does not synthesize missing italic faces.
+No bundled glyph fallback is
 provided. Choose a monospace family for correct terminal alignment.
 Restart the GUI to reload. Only load trusted config: this is executable Lua.
 
@@ -200,7 +206,7 @@ with `remote` and `user_vars` (the active tab's OSC 1337 variables);
  tab's `user_vars`.
 Return a string or an array of `{text = "...", color = "#RRGGBBAA"}`
 segments. Color is optional. Nerd Font icons followed by a space enlarge into
-that space automatically. Set `icon_scale = 1.5` (default; range 1–3) to configure their
+that space automatically. Set `icon_scale = 1.0` (default; range 1–3) to configure their
 enlargement in both the terminal and status bar. Icons remain clipped to the row.
 Custom command icons, themes and status animations belong in your Lua config;
 Rust has no ghost-specific rendering logic.

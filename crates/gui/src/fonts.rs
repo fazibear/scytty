@@ -10,10 +10,12 @@ pub fn resolve(family: &str) -> Result<String> {
     };
     let id = db
         .query(&fontdb::Query {
-            families: &[query],
+            families: &[query, fontdb::Family::Monospace],
             ..Default::default()
         })
-        .with_context(|| format!("installed font family not found: {family}"))?;
+        .with_context(|| {
+            format!("neither font family {family} nor a system monospace font was found")
+        })?;
     Ok(db.face(id).context("font disappeared")?.families[0]
         .0
         .clone())

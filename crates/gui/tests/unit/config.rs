@@ -1,6 +1,32 @@
 use super::*;
 
 #[test]
+fn font_arrays_configure_glyph_fallbacks() -> Result<()> {
+    let config = Config::parse("return {font_family={'Menlo','FiraCode Nerd Font Mono'}}")?;
+    assert_eq!(config.font_family, "Menlo");
+    assert_eq!(
+        config.font().fallbacks.unwrap().fallback_list(),
+        &["FiraCode Nerd Font Mono"]
+    );
+    assert!(
+        Config::parse("return {font_family='Menlo'}")?
+            .font()
+            .fallbacks
+            .is_none()
+    );
+    for value in [
+        "{}",
+        "{'Menlo',false}",
+        "{'Menlo',''}",
+        "{[1]='Menlo',[3]='Other'}",
+        "{name='Menlo'}",
+    ] {
+        assert!(Config::parse(&format!("return {{font_family={value}}}")).is_err());
+    }
+    Ok(())
+}
+
+#[test]
 fn tab_bar_labels_are_configurable_and_validated() -> Result<()> {
     let defaults = Config::default();
     assert_eq!(
@@ -564,7 +590,7 @@ fn lua_config_and_validation() -> Result<()> {
         Config::parse("return {font_family='Menlo'}")?.font_family,
         "Menlo"
     );
-    assert_eq!(config.icon_scale, 1.5);
+    assert_eq!(config.icon_scale, 1.0);
     assert_eq!(Config::parse("return {icon_scale=2}")?.icon_scale, 2.0);
     assert_eq!(config.window_width, 960.0);
     for source in [

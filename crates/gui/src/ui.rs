@@ -204,7 +204,7 @@ impl Gui {
     }
     pub(super) fn plus_menu(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let position = self.plus_menu_position?;
-        let mut menu_font = font(self.config.font_family.clone());
+        let mut menu_font = self.config.font();
         menu_font.weight = FontWeight::MEDIUM;
         let width = menu_width(
             self.config
@@ -594,7 +594,7 @@ impl Gui {
             .max(1.) as u32;
         let mut wrapper = window
             .text_system()
-            .line_wrapper(font(self.config.font_family.clone()).bold(), px(16.));
+            .line_wrapper(self.config.font().bold(), px(16.));
         let rows: Vec<_> = error
             .split('\n')
             .flat_map(|line| {

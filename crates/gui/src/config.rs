@@ -35,6 +35,7 @@ pub struct Config {
     pub default_cursor_style: ghostty_vt::terminal::CursorStyle,
     pub scrollback_mb: u16,
     pub font_family: String,
+    pub font_fallbacks: Vec<String>,
     pub tab_left_indicator: TabBarLabel,
     pub tab_right_indicator: TabBarLabel,
     pub new_tab_button: TabBarLabel,
@@ -76,6 +77,7 @@ impl Default for Config {
             default_cursor_style: ghostty_vt::terminal::CursorStyle::Block,
             scrollback_mb: 16,
             font_family: "monospace".into(),
+            font_fallbacks: Vec::new(),
             tab_left_indicator: TabBarLabel {
                 text: "<".into(),
                 color: None,
@@ -88,7 +90,7 @@ impl Default for Config {
                 text: "+".into(),
                 color: None,
             },
-            icon_scale: 1.5,
+            icon_scale: 1.0,
             background_opacity: 0.7,
             window_width: 960.0,
             window_height: 640.0,
@@ -98,6 +100,13 @@ impl Default for Config {
     }
 }
 impl Config {
+    pub fn font(&self) -> gpui::Font {
+        let mut font = gpui::font(self.font_family.clone());
+        if !self.font_fallbacks.is_empty() {
+            font.fallbacks = Some(gpui::FontFallbacks::from_fonts(self.font_fallbacks.clone()));
+        }
+        font
+    }
     pub fn load() -> Result<Self> {
         let base = std::env::var_os("XDG_CONFIG_HOME")
             .map(PathBuf::from)
@@ -397,14 +406,43 @@ impl Config {
                 continue;
             }
             if key == "font_family" {
-                let Value::String(value) = raw else {
-                    bail!("font_family must be a string")
+                let values = match raw {
+                    Value::String(value) => vec![value],
+                    Value::Table(table) => {
+                        let len = table.raw_len();
+                        let mut count = 0;
+                        for pair in table.clone().pairs::<usize, Value>() {
+                            let (index, _) = pair?;
+                            if index == 0 || index > len {
+                                bail!("font_family must be a contiguous array")
+                            }
+                            count += 1;
+                        }
+                        if len == 0 || count != len {
+                            bail!("font_family must be a nonempty contiguous array")
+                        }
+                        table
+                            .sequence_values::<Value>()
+                            .map(|value| match value? {
+                                Value::String(value) => Ok(value),
+                                _ => Err(mlua::Error::RuntimeError(
+                                    "font families must be strings".into(),
+                                )),
+                            })
+                            .collect::<mlua::Result<Vec<_>>>()?
+                    }
+                    _ => bail!("font_family must be a string or an array of strings"),
                 };
-                let value = value.to_str()?;
-                if value.trim().is_empty() {
-                    bail!("font_family must not be empty")
+                let mut families = Vec::new();
+                for value in values {
+                    let value = value.to_str()?;
+                    if value.trim().is_empty() || value.chars().any(char::is_control) {
+                        bail!("font_family must be nonempty text without control characters")
+                    }
+                    families.push(value.to_owned());
                 }
-                config.font_family = value.to_owned();
+                config.font_family = families.remove(0);
+                config.font_fallbacks = families;
                 continue;
             }
             if matches!(

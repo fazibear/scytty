@@ -1149,7 +1149,7 @@ impl Gui {
             ElementInputHandler::new(bounds, cx.entity()),
             cx,
         );
-        let font = font(self.config.font_family.clone());
+        let font = self.config.font();
         let font_size = px(self.config.font_size);
         let font_id = window.text_system().resolve_font(&font);
         self.cell = size(
@@ -1360,7 +1360,7 @@ impl Render for Gui {
             .flex()
             .flex_col()
             .text_size(px(self.config.font_size))
-            .font_family(self.config.font_family.clone())
+            .font(self.config.font())
             .text_color(rgb(0xdcdcdc))
             .bg(Rgba {
                 a: self.config.background_opacity,

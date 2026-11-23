@@ -74,10 +74,7 @@ fn run_end(cells: &[Cell], start: usize) -> usize {
 fn overhang_columns(cells: &[Cell], x: usize) -> usize {
     let mut columns = 0;
     for c in cells.iter().skip_while(|c| c.x < x) {
-        if c.x != x + columns
-            || c.width != 1
-            || !(c.text.is_empty() || c.text == " ")
-        {
+        if c.x != x + columns || c.width != 1 || !(c.text.is_empty() || c.text == " ") {
             break;
         }
         columns += 1;
@@ -226,13 +223,12 @@ impl Cache {
                 let mut line = line;
                 let mut fit = 1.;
                 if !expanded && line.width > cell.width * columns as f32 + px(0.01) {
-                    let available = cell.width
-                        * (columns + overhang_columns(source, c.x + columns)) as f32;
+                    let available =
+                        cell.width * (columns + overhang_columns(source, c.x + columns)) as f32;
                     // Blank neighbors absorb the overflow; otherwise shrink to fit.
                     if line.width > available + px(0.01) {
                         fit = f32::from(available) / f32::from(line.width);
-                        let text: String =
-                            source[i..end].iter().map(|c| c.text.as_str()).collect();
+                        let text: String = source[i..end].iter().map(|c| c.text.as_str()).collect();
                         line = window.text_system().shape_line(
                             text.into(),
                             font_size * fit,
@@ -302,8 +298,8 @@ impl Cache {
                     // cell; overpaint blank neighbors instead of clipping glyphs.
                     let overflow = text.line.width - bounds.size.width;
                     if overflow > px(0.01) {
-                        let allowance = cell.width
-                            * overhang_columns(&row.cells, text.x + text.columns) as f32;
+                        let allowance =
+                            cell.width * overhang_columns(&row.cells, text.x + text.columns) as f32;
                         bounds.size.width += overflow.min(allowance);
                     }
                     let origin = if text.fit != 1. {
