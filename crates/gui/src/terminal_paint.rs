@@ -69,6 +69,21 @@ fn run_end(cells: &[Cell], start: usize) -> usize {
     end
 }
 
+// Blank single-width cells a wider fallback glyph may overpaint; wide-cell spacers stop it.
+fn overhang_columns(cells: &[Cell], x: usize) -> usize {
+    let mut columns = 0;
+    for c in cells.iter().skip_while(|c| c.x < x) {
+        if c.x != x + columns
+            || c.width != 1
+            || !(c.text.is_empty() || c.text == " ")
+        {
+            break;
+        }
+        columns += 1;
+    }
+    columns
+}
+
 fn backgrounds(cells: &[Cell], output: &mut Vec<(usize, usize, Rgba)>) {
     output.clear();
     for c in cells {
@@ -249,7 +264,7 @@ impl Cache {
                     continue;
                 }
                 let origin = origin + point(cell.width * text.x as f32, cell.height * y as f32);
-                let bounds =
+                let mut bounds =
                     Bounds::new(origin, size(cell.width * text.columns as f32, cell.height));
                 if text.expanded {
                     let origin = origin
@@ -261,6 +276,14 @@ impl Cache {
                         text.line.paint(origin, cell.height, window, cx)
                     })?;
                 } else {
+                    // Fallback fonts can be wider than the configured monospace
+                    // cell; overpaint blank neighbors instead of clipping glyphs.
+                    let overflow = text.line.width - bounds.size.width;
+                    if overflow > px(0.01) {
+                        let allowance = cell.width
+                            * overhang_columns(&row.cells, text.x + text.columns) as f32;
+                        bounds.size.width += overflow.min(allowance);
+                    }
                     window.with_content_mask(Some(ContentMask { bounds }), |window| {
                         text.line.paint(origin, cell.height, window, cx)
                     })?;

@@ -107,3 +107,36 @@ fn batches_ascii_without_crossing_style_grid_or_complex_text() {
     cells[1].y = 1;
     assert_eq!(run_end(&cells, 0), 1);
 }
+
+#[test]
+fn overhang_only_covers_contiguous_blank_single_width_cells() {
+    let cells = vec![
+        cell(0, "➜"),
+        cell(1, " "),
+        cell(2, " "),
+        cell(3, "x"),
+        cell(4, " "),
+    ];
+    assert_eq!(overhang_columns(&cells, 1), 2);
+    assert_eq!(overhang_columns(&cells, 3), 0);
+    assert_eq!(overhang_columns(&cells, 5), 0);
+    assert_eq!(overhang_columns(&cells, 9), 0);
+
+    let mut wide_tail = cell(1, "");
+    wide_tail.width = 0;
+    assert_eq!(overhang_columns(&[cell(0, "⚠"), wide_tail, cell(2, " ")], 1), 0);
+
+    let mut wide_head = cell(1, "😀");
+    wide_head.width = 2;
+    assert_eq!(overhang_columns(&[cell(0, "➜"), wide_head], 1), 0);
+
+    let mut invisible_wide = cell(1, "");
+    invisible_wide.width = 2;
+    assert_eq!(overhang_columns(&[cell(0, "➜"), invisible_wide, cell(2, " ")], 1), 0);
+
+    let mut gap = cell(3, " ");
+    gap.x = 3;
+    assert_eq!(overhang_columns(&[cell(0, "➜"), gap], 1), 0);
+
+    assert_eq!(overhang_columns(&[], 0), 0);
+}
