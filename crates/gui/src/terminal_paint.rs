@@ -25,6 +25,7 @@ struct Text {
     expanded: bool,
     columns: usize,
     blink: bool,
+    fit: f32,
 }
 
 pub(super) fn blink_visible(elapsed: Duration) -> bool {
@@ -211,21 +212,42 @@ impl Cache {
                             expanded: false,
                             columns: usize::from(c.width),
                             blink: c.blink,
+                            fit: 1.,
                         });
                     }
                     i = end;
                     continue;
                 }
+                let columns = if expanded {
+                    2
+                } else {
+                    source[i..end].iter().map(|c| usize::from(c.width)).sum()
+                };
+                let mut line = line;
+                let mut fit = 1.;
+                if !expanded && line.width > cell.width * columns as f32 + px(0.01) {
+                    let available = cell.width
+                        * (columns + overhang_columns(source, c.x + columns)) as f32;
+                    // Blank neighbors absorb the overflow; otherwise shrink to fit.
+                    if line.width > available + px(0.01) {
+                        fit = f32::from(available) / f32::from(line.width);
+                        let text: String =
+                            source[i..end].iter().map(|c| c.text.as_str()).collect();
+                        line = window.text_system().shape_line(
+                            text.into(),
+                            font_size * fit,
+                            &[run],
+                            None,
+                        );
+                    }
+                }
                 row.text.push(Text {
                     x: c.x,
                     line,
                     expanded,
-                    columns: if expanded {
-                        2
-                    } else {
-                        source[i..end].iter().map(|c| usize::from(c.width)).sum()
-                    },
+                    columns,
                     blink: c.blink,
+                    fit,
                 });
                 i = end;
             }
@@ -284,6 +306,11 @@ impl Cache {
                             * overhang_columns(&row.cells, text.x + text.columns) as f32;
                         bounds.size.width += overflow.min(allowance);
                     }
+                    let origin = if text.fit != 1. {
+                        origin + point(px(0.), (cell.height - font_size * text.fit) / 2.)
+                    } else {
+                        origin
+                    };
                     window.with_content_mask(Some(ContentMask { bounds }), |window| {
                         text.line.paint(origin, cell.height, window, cx)
                     })?;
