@@ -182,7 +182,7 @@ impl Cache {
                 let line = window.text_system().shape_line(
                     text.into(),
                     font_size * scale,
-                    &[run],
+                    std::array::from_ref(&run),
                     (end > i + 1).then_some(cell.width),
                 );
                 // Ligatures or fallback fonts must not move terminal cell boundaries.
