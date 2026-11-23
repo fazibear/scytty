@@ -60,7 +60,7 @@ fn native_progress_follows_live_active_tab_and_validates_percent() {
 }
 use core::prelude::v1::test;
 #[test]
-fn status_icons_expand_only_into_a_following_space() {
+fn status_runs_preserve_symbols_spaces_and_colors() {
     let red = Some(rgb(0xff0000));
     assert_eq!(
         status_runs(vec![
@@ -68,14 +68,13 @@ fn status_icons_expand_only_into_a_following_space() {
             (" next\u{e0b0}".into(), None),
         ]),
         vec![
-            ("a\u{301} \u{e0b0}main".into(), red, false),
-            ("\u{f0001}".into(), red, true),
-            ("next\u{e0b0}".into(), None, false),
+            ("a\u{301} \u{e0b0}main\u{f0001}".into(), red),
+            (" next\u{e0b0}".into(), None),
         ]
     );
     assert_eq!(
         status_runs(vec![("\u{e0b0}  x".into(), None)]),
-        vec![("\u{e0b0}".into(), None, true), (" x".into(), None, false),]
+        vec![("\u{e0b0}  x".into(), None)]
     );
     assert!(status_runs(vec![]).is_empty());
 }

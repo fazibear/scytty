@@ -1,5 +1,34 @@
 use super::*;
 use gpui::rgb;
+
+#[test]
+fn generic_symbols_center_by_ink_bounds() {
+    for text in ["\u{f179}", "⚠", "★"] {
+        assert!(centered_symbol(text).is_some());
+    }
+    for text in ["A", "a\u{301}", "─", "█", "⣿", "\u{e0b0}"] {
+        assert!(centered_symbol(text).is_none());
+    }
+    let cell = size(px(10.), px(20.));
+    for bottom in [px(-3.), px(0.), px(2.)] {
+        let ink = Bounds::new(point(px(1.), bottom), size(px(6.), px(8.)));
+        let offset = centered_origin(cell, ink, px(14.));
+        let visible_top = offset.y + px(14.) - ink.origin.y - ink.size.height;
+        let visible_left = offset.x + ink.origin.x;
+        assert_eq!(visible_top, px(6.));
+        assert_eq!(cell.height - visible_top - ink.size.height, px(6.));
+        assert_eq!(visible_left, px(2.));
+        assert_eq!(cell.width - visible_left - ink.size.width, px(2.));
+    }
+}
+
+#[test]
+fn glyph_overhang_is_not_font_specific() {
+    for text in ["\u{f179}", "⚠", "➜", "A"] {
+        assert_eq!(overhang_columns(&[cell(0, text), cell(1, " ")], 1), 1);
+        assert_eq!(overhang_columns(&[cell(0, text), cell(1, "x")], 1), 0);
+    }
+}
 fn cell(x: usize, text: &str) -> Cell {
     Cell {
         x,

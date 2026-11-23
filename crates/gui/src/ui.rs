@@ -106,25 +106,17 @@ impl Gui {
         &self,
         segments: Vec<(String, Option<Rgba>)>,
         font_size: f32,
-        line_height: Pixels,
+        _line_height: Pixels,
     ) -> Div {
         let mut line = div().flex().items_center().flex_shrink_0();
-        for (text, color, expand) in status_runs(segments) {
-            let scale = if expand { self.config.icon_scale } else { 1. };
-            let mut run = div()
-                .flex_shrink_0()
-                .text_size(px(font_size * scale))
-                .text_color(color.unwrap_or(rgb(0xc6d0f5)))
-                .child(text);
-            if expand {
-                run = run
-                    .w(self.cell.width * (2. * font_size / self.config.font_size))
-                    .h(line_height)
-                    .line_height(line_height)
-                    .text_center()
-                    .overflow_hidden();
-            }
-            line = line.child(run);
+        for (text, color) in status_runs(segments) {
+            line = line.child(
+                div()
+                    .flex_shrink_0()
+                    .text_size(px(font_size))
+                    .text_color(color.unwrap_or(rgb(0xc6d0f5)))
+                    .child(text),
+            );
         }
         line
     }
@@ -212,31 +204,22 @@ impl Gui {
                 .iter()
                 .filter(|entry| entry.action != config::MenuAction::Separator)
                 .map(|entry| {
-                    status_runs(vec![(entry.label.clone(), None)])
-                        .into_iter()
-                        .fold(px(0.), |width, (text, _, expand)| {
-                            width
-                                + if expand {
-                                    self.cell.width * (2. * 14. / self.config.font_size)
-                                } else {
-                                    let run = TextRun {
-                                        len: text.len(),
-                                        font: menu_font.clone(),
-                                        color: rgb(0xf4edf9).into(),
-                                        background_color: None,
-                                        underline: None,
-                                        strikethrough: None,
-                                    };
-                                    window
-                                        .text_system()
-                                        .shape_line(text.into(), px(14.), &[run], None)
-                                        .width
-                                }
-                        })
+                    let run = TextRun {
+                        len: entry.label.len(),
+                        font: menu_font.clone(),
+                        color: rgb(0xf4edf9).into(),
+                        background_color: None,
+                        underline: None,
+                        strikethrough: None,
+                    };
+                    window
+                        .text_system()
+                        .shape_line(entry.label.clone().into(), px(14.), &[run], None)
+                        .width
                 }),
             window.viewport_size().width,
         );
-        let row_height = px((self.config.font_size * 1.5).max(14. * self.config.icon_scale) + 8.);
+        let row_height = px((self.config.font_size * 1.5).max(14.) + 8.);
         let height = (self
             .config
             .plus_menu

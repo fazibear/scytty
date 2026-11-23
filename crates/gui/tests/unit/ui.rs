@@ -171,23 +171,23 @@ fn indicators_and_scroll_offset_settle_after_viewport_moves() {
 }
 
 #[test]
-fn bar_and_menu_icons_use_shared_scaling_runs_and_preserve_colors() {
+fn bar_and_menu_symbols_preserve_natural_text_and_colors() {
     for color in [Some(rgb(0xcba6f7)), Some(rgba(0))] {
         assert_eq!(
             status_runs(vec![(" New tab".into(), color)]),
-            vec![("".into(), color, true), ("New tab".into(), color, false)]
+            vec![(" New tab".into(), color)]
         );
         assert_eq!(
             status_runs(vec![(" ".into(), color)]),
-            vec![("".into(), color, true)]
+            vec![(" ".into(), color)]
         );
         assert_eq!(
             status_runs(vec![(" ".into(), color)]),
-            vec![("".into(), color, true)]
+            vec![(" ".into(), color)]
         );
         assert_eq!(
             status_runs(vec![("".into(), color)]),
-            vec![("".into(), color, false)]
+            vec![("".into(), color)]
         );
     }
 }

@@ -1223,14 +1223,8 @@ impl Gui {
         } else {
             0..0
         };
-        tab.paint_cache.prepare(
-            &tab.bidi.cells,
-            &font,
-            font_size,
-            cell,
-            self.config.icon_scale,
-            window,
-        );
+        tab.paint_cache
+            .prepare(&tab.bidi.cells, &font, font_size, cell, window);
         let images = &tab.placements;
         window.with_content_mask(Some(ContentMask { bounds }), |window| -> Result<()> {
             for image in images.iter().filter(|i| i.z < i32::MIN / 2) {
@@ -1259,14 +1253,8 @@ impl Gui {
             for image in images.iter().filter(|i| i.z < 0 && i.z >= i32::MIN / 2) {
                 image.paint(window)?;
             }
-            tab.paint_cache.text(
-                bounds.origin,
-                cell,
-                font_size,
-                self.config.icon_scale,
-                window,
-                cx,
-            )?;
+            tab.paint_cache
+                .text(bounds.origin, cell, font_size, window, cx)?;
             for c in &tab.cells[hovered_cells] {
                 window.paint_quad(fill(
                     Bounds::new(
@@ -1629,35 +1617,21 @@ fn terminal_cell_height(ascent: Pixels, descent: Pixels, scale: f32) -> Pixels {
     px((f32::from(height) * scale).floor().max(1.) / scale)
 }
 
-fn is_nerd_icon(ch: char) -> bool {
-    matches!(ch, '\u{e000}'..='\u{f8ff}' | '\u{f0000}'..='\u{ffffd}' | '\u{100000}'..='\u{10fffd}')
-}
-fn status_runs(segments: Vec<(String, Option<Rgba>)>) -> Vec<(String, Option<Rgba>, bool)> {
-    let mut chars = segments
-        .iter()
-        .flat_map(|(text, color)| text.chars().map(move |ch| (ch, *color)))
-        .peekable();
-    let mut runs: Vec<(String, Option<Rgba>, bool)> = Vec::new();
-    while let Some((ch, color)) = chars.next() {
-        let expand = is_nerd_icon(ch) && chars.peek().is_some_and(|(next, _)| *next == ' ');
-        if expand {
-            chars.next();
-            runs.push((ch.to_string(), color, true));
-        } else if let Some((text, previous_color, false)) = runs.last_mut()
+fn status_runs(segments: Vec<(String, Option<Rgba>)>) -> Vec<(String, Option<Rgba>)> {
+    let mut runs: Vec<(String, Option<Rgba>)> = Vec::new();
+    for (text, color) in segments {
+        if text.is_empty() {
+            continue;
+        }
+        if let Some((previous, previous_color)) = runs.last_mut()
             && *previous_color == color
         {
-            text.push(ch);
+            previous.push_str(&text);
         } else {
-            runs.push((ch.to_string(), color, false));
+            runs.push((text, color));
         }
     }
     runs
-}
-fn expand_nerd_icon(text: &str, next: &str) -> bool {
-    let mut chars = text.chars();
-    chars.next().is_some_and(is_nerd_icon)
-        && chars.next().is_none()
-        && (next.is_empty() || next == " ")
 }
 fn selection_point(
     pos: gpui::Point<Pixels>,

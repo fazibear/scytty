@@ -1,4 +1,28 @@
-use crate::{Cell, expand_nerd_icon};
+use crate::Cell;
+use unicode_properties::{GeneralCategory, UnicodeGeneralCategory};
+
+fn centered_symbol(text: &str) -> Option<char> {
+    let mut chars = text.chars();
+    let ch = chars.next()?;
+    if chars.next().is_some()
+        || matches!(ch, '\u{2500}'..='\u{259f}' | '\u{2800}'..='\u{28ff}' | '\u{e0b0}'..='\u{e0d7}')
+    {
+        return None;
+    }
+    matches!(
+        ch.general_category(),
+        GeneralCategory::OtherSymbol | GeneralCategory::PrivateUse
+    )
+    .then_some(ch)
+}
+
+fn centered_origin(cell: Size<Pixels>, ink: Bounds<Pixels>, baseline: Pixels) -> Point<Pixels> {
+    point(
+        (cell.width - ink.size.width) / 2. - ink.origin.x,
+        // Font bounds are Y-up from the baseline; painting coordinates are Y-down.
+        (cell.height + ink.size.height) / 2. + ink.origin.y - baseline,
+    )
+}
 use ghostty_vt::style::Underline;
 use gpui::{
     App, Bounds, ContentMask, Font, Pixels, Point, Rgba, ShapedLine, Size, TextRun, Window, fill,
@@ -8,7 +32,7 @@ use std::time::{Duration, Instant};
 
 #[derive(Default)]
 pub struct Cache {
-    key: Option<(Font, Pixels, Size<Pixels>, f32)>,
+    key: Option<(Font, Pixels, Size<Pixels>)>,
     rows: Vec<Row>,
     blink_epoch: Option<Instant>,
 }
@@ -22,7 +46,6 @@ struct Row {
 struct Text {
     x: usize,
     line: ShapedLine,
-    expanded: bool,
     columns: usize,
     blink: bool,
     fit: f32,
@@ -128,11 +151,10 @@ impl Cache {
         font: &Font,
         font_size: Pixels,
         cell: Size<Pixels>,
-        icon_scale: f32,
         window: &mut Window,
     ) {
         self.blink_epoch.get_or_insert_with(Instant::now);
-        let key = (font.clone(), font_size, cell, icon_scale);
+        let key = (font.clone(), font_size, cell);
         if self.key.as_ref() != Some(&key) {
             self.rows.clear();
             self.key = Some(key);
@@ -160,13 +182,6 @@ impl Cache {
                     continue;
                 }
                 let end = run_end(source, i);
-                let expanded = c.width == 1
-                    && source.get(i + 1).is_some_and(|next| {
-                        next.width == 1
-                            && next.x == c.x + 1
-                            && expand_nerd_icon(&c.text, &next.text)
-                    });
-                let scale = if expanded { icon_scale } else { 1. };
                 let text: String = source[i..end].iter().map(|c| c.text.as_str()).collect();
                 let run = TextRun {
                     len: text.len(),
@@ -178,7 +193,7 @@ impl Cache {
                 };
                 let line = window.text_system().shape_line(
                     text.into(),
-                    font_size * scale,
+                    font_size,
                     std::array::from_ref(&run),
                     (end > i + 1).then_some(cell.width),
                 );
@@ -206,7 +221,6 @@ impl Cache {
                         row.text.push(Text {
                             x: c.x,
                             line,
-                            expanded: false,
                             columns: usize::from(c.width),
                             blink: c.blink,
                             fit: 1.,
@@ -215,14 +229,13 @@ impl Cache {
                     i = end;
                     continue;
                 }
-                let columns = if expanded {
-                    2
-                } else {
-                    source[i..end].iter().map(|c| usize::from(c.width)).sum()
-                };
+                let columns = source[i..end]
+                    .iter()
+                    .map(|c| usize::from(c.width))
+                    .sum::<usize>();
                 let mut line = line;
                 let mut fit = 1.;
-                if !expanded && line.width > cell.width * columns as f32 + px(0.01) {
+                if line.width > cell.width * columns as f32 + px(0.01) {
                     let available =
                         cell.width * (columns + overhang_columns(source, c.x + columns)) as f32;
                     // Blank neighbors absorb the overflow; otherwise shrink to fit.
@@ -240,7 +253,6 @@ impl Cache {
                 row.text.push(Text {
                     x: c.x,
                     line,
-                    expanded,
                     columns,
                     blink: c.blink,
                     fit,
@@ -269,7 +281,6 @@ impl Cache {
         origin: Point<Pixels>,
         cell: Size<Pixels>,
         font_size: Pixels,
-        icon_scale: f32,
         window: &mut Window,
         cx: &mut App,
     ) -> anyhow::Result<()> {
@@ -284,16 +295,7 @@ impl Cache {
                 let origin = origin + point(cell.width * text.x as f32, cell.height * y as f32);
                 let mut bounds =
                     Bounds::new(origin, size(cell.width * text.columns as f32, cell.height));
-                if text.expanded {
-                    let origin = origin
-                        + point(
-                            (cell.width * 2. - text.line.width) / 2.,
-                            (cell.height - font_size * icon_scale) / 2.,
-                        );
-                    window.with_content_mask(Some(ContentMask { bounds }), |window| {
-                        text.line.paint(origin, cell.height, window, cx)
-                    })?;
-                } else {
+                {
                     // Fallback fonts can be wider than the configured monospace
                     // cell; overpaint blank neighbors instead of clipping glyphs.
                     let overflow = text.line.width - bounds.size.width;
@@ -304,6 +306,26 @@ impl Cache {
                     }
                     let origin = if text.fit != 1. {
                         origin + point(px(0.), (cell.height - font_size * text.fit) / 2.)
+                    } else {
+                        origin
+                    };
+                    let origin = if let Some(ch) = centered_symbol(&text.line.text) {
+                        if let Some(run) = text.line.runs.first() {
+                            if let Ok(ink) = window.text_system().typographic_bounds(
+                                run.font_id,
+                                font_size * text.fit,
+                                ch,
+                            ) {
+                                let baseline = (cell.height - text.line.ascent - text.line.descent)
+                                    / 2.
+                                    + text.line.ascent;
+                                bounds.origin + centered_origin(bounds.size, ink, baseline)
+                            } else {
+                                origin
+                            }
+                        } else {
+                            origin
+                        }
                     } else {
                         origin
                     };

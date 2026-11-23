@@ -5038,6 +5038,7 @@ dependencies = [
  "sha2 0.11.1",
  "unicode-bidi",
  "unicode-bidi-mirroring 0.4.0",
+ "unicode-properties",
  "unicode-segmentation",
  "windows 0.61.3",
  "winresource",

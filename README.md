@@ -79,6 +79,12 @@ if the session no longer exists, reattachment creates a new shell.
 
 The default font is the system **monospace** family at 16pt. No fonts are bundled.
 Install and select a Nerd Font to display the status bar's icons.
+Terminal glyphs use natural shaped widths: blank neighboring cells permit overflow;
+otherwise oversized glyphs shrink to fit without covering text. Terminal rendering
+has no Nerd-specific enlargement. Standalone Unicode symbols and private-use
+glyphs are centered using their font ink bounds, even without a following space.
+Letters, combining sequences, box/block drawing, Braille, and Powerline separators
+keep normal alignment. UI symbols use natural font shaping. `icon_scale` is accepted for config compatibility but has no effect.
 
 ## Just commands
 
@@ -191,10 +197,8 @@ new_tab_button = {text = "＋", color = "#a6e3a1"},
 Defaults are `<`, `>`, and `+` with inherited text color. Each setting accepts a
 plain string or `{text = "…", color = "#RRGGBB"}`; color is optional. Text must be
 nonempty and single-line. Unicode symbols depend on your installed font.
-Nerd Font icons followed by a space (e.g. `" "`) use `icon_scale`, just like tab
-and status text; the space is consumed to reserve the wider icon cell.
-Menu-entry labels use the same rule, e.g. `label = " New tab"`; only the icon is
-scaled, while menu text stays at its normal size.
+Symbols use natural font shaping at the label's text size, without Nerd-specific
+scaling or centering. Spaces are preserved, including in menu-entry labels.
 Hidden indicators take no space. Tab formatting and button actions are unchanged.
 It occupies the titlebar area beside the native macOS window buttons; drag empty
 bar space to move the window. The native title text is hidden.
@@ -205,9 +209,8 @@ with `remote` and `user_vars` (the active tab's OSC 1337 variables);
 `format_tab` also receives `title`, `index` (1-based), and `active`, and its own
  tab's `user_vars`.
 Return a string or an array of `{text = "...", color = "#RRGGBBAA"}`
-segments. Color is optional. Nerd Font icons followed by a space enlarge into
-that space automatically. Set `icon_scale = 1.0` (default; range 1–3) to configure their
-enlargement in both the terminal and status bar. Icons remain clipped to the row.
+segments. Color is optional. Symbols and text use the same natural font shaping;
+no extra space is consumed or artificial icon enlargement applied.
 Custom command icons, themes and status animations belong in your Lua config;
 Rust has no ghost-specific rendering logic.
 Callbacks run on GUI redraw; the GUI refreshes once a second for clocks.
