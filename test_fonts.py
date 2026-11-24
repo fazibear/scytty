@@ -28,6 +28,13 @@ print("Terminal text styles:")
 for name, code in STYLES.items():
     show(name, sample, style=code)
 
+print("\nItalic overhangs (check slash tips and f/j descenders):")
+show("Slashes", "// CMD - base yellow", style=STYLES["italic"])
+show("Letters", "ff jj fy fj / // ///", style=STYLES["italic"])
+show("Style edges", f"|{STYLES['italic']}//fj{RESET}|{STYLES['italic']}f/j{RESET}|")
+show("Color edges", "//fj", style=STYLES["italic"], color=COLORS["red"])
+print(f"{STYLES['italic']}//{COLORS['red']}fj{COLORS['green']}//{RESET}")
+
 print("\nDifferent colors:")
 for name, code in COLORS.items():
     show(name, sample, color=code)

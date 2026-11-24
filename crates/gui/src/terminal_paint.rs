@@ -29,8 +29,8 @@ pub(super) fn centered_origin(
 }
 use ghostty_vt::style::Underline;
 use gpui::{
-    App, Bounds, ContentMask, Font, Pixels, Point, Rgba, ShapedLine, Size, TextRun, Window, fill,
-    point, px, size,
+    App, Bounds, Font, Pixels, Point, Rgba, ShapedLine, Size, TextRun, Window, fill, point, px,
+    size,
 };
 use std::time::{Duration, Instant};
 
@@ -300,8 +300,7 @@ impl Cache {
                 let mut bounds =
                     Bounds::new(origin, size(cell.width * text.columns as f32, cell.height));
                 {
-                    // Fallback fonts can be wider than the configured monospace
-                    // cell; overpaint blank neighbors instead of clipping glyphs.
+                    // Include available blank neighbors when centering fallback symbols.
                     let overflow = text.line.width - bounds.size.width;
                     if overflow > px(0.01) {
                         let allowance =
@@ -333,9 +332,10 @@ impl Cache {
                     } else {
                         origin
                     };
-                    window.with_content_mask(Some(ContentMask { bounds }), |window| {
-                        text.line.paint(origin, cell.height, window, cx)
-                    })?;
+                    // Advance widths describe the grid, not the ink bounds. Italics
+                    // (including slashes) can extend past either end of a run.
+                    // Keep the terminal viewport mask, but do not clip each run.
+                    text.line.paint(origin, cell.height, window, cx)?;
                 }
             }
             // Decorate the grid, not glyph widths: spaces and wide-cell padding count too.
