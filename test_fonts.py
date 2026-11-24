@@ -35,6 +35,12 @@ show("Style edges", f"|{STYLES['italic']}//fj{RESET}|{STYLES['italic']}f/j{RESET
 show("Color edges", "//fj", style=STYLES["italic"], color=COLORS["red"])
 print(f"{STYLES['italic']}//{COLORS['red']}fj{COLORS['green']}//{RESET}")
 
+print("\nBlock art (solid edges should meet without gaps):")
+print("█▀▀█ █▀▀█ █▀▀▀ █▀▀█")
+print("█  █ █▄▄█ █▀▀  █  █")
+print("█▄▄█ █    █▄▄▄ █  █")
+print("▁▂▃▄▅▆▇█ ▉▊▋▌▍▎▏ ▖▗▘▙▚▛▜▝▞▟")
+
 print("\nDifferent colors:")
 for name, code in COLORS.items():
     show(name, sample, color=code)
