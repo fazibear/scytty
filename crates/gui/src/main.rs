@@ -23,6 +23,7 @@ use std::{
 };
 mod ansi;
 mod bidi;
+mod box_drawing;
 mod cli;
 mod clipboard;
 mod config;

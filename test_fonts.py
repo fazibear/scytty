@@ -41,6 +41,14 @@ print("█  █ █▄▄█ █▀▀  █  █")
 print("█▄▄█ █    █▄▄▄ █  █")
 print("▁▂▃▄▅▆▇█ ▉▊▋▌▍▎▏ ▖▗▘▙▚▛▜▝▞▟")
 
+print("\nBox borders (connections should meet without gaps):")
+print("┌────┬────┐  ┏━━━━┳━━━━┓")
+print("│    │    │  ┃    ┃    ┃")
+print("├────┼────┤  ┣━━━━╋━━━━┫")
+print("│    │    │  ┃    ┃    ┃")
+print("└────┴────┘  ┗━━━━┻━━━━┛")
+show("Italic border", "┌──┬──┐ │││ └──┴──┘", style=STYLES["italic"])
+
 print("\nDifferent colors:")
 for name, code in COLORS.items():
     show(name, sample, color=code)

@@ -226,7 +226,11 @@ impl Cache {
             let mut i = 0;
             while i < source.len() {
                 let c = &source[i];
-                if c.text.is_empty() || c.text == " " || block_rectangles(&c.text).is_some() {
+                if c.text.is_empty()
+                    || c.text == " "
+                    || block_rectangles(&c.text).is_some()
+                    || crate::box_drawing::supported(&c.text)
+                {
                     i += 1;
                     continue;
                 }
@@ -349,6 +353,18 @@ impl Cache {
                             block_bounds(origin, block_cell, rect, window.scale_factor()),
                             c.fg,
                         ));
+                    }
+                }
+                if crate::box_drawing::supported(&c.text)
+                    && let Some(rects) = crate::box_drawing::rectangles(
+                        &c.text,
+                        origin + point(cell.width * c.x as f32, cell.height * y as f32),
+                        size(cell.width * f32::from(c.width), cell.height),
+                        window.scale_factor(),
+                    )
+                {
+                    for bounds in rects {
+                        window.paint_quad(fill(bounds, c.fg));
                     }
                 }
             }
