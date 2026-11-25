@@ -23,11 +23,11 @@ use std::{
 };
 mod ansi;
 mod bidi;
-mod box_drawing;
 mod cli;
 mod clipboard;
 mod config;
 mod cursor;
+mod custom_glyph;
 mod find;
 mod fonts;
 mod images;

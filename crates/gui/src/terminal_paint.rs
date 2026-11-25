@@ -34,51 +34,6 @@ use gpui::{
 };
 use std::time::{Duration, Instant};
 
-// Eighth-cell rectangles for Unicode block elements. Draw these against the
-// grid rather than using platform font bearings and fallback glyph metrics.
-fn block_rectangles(text: &str) -> Option<Vec<(u8, u8, u8, u8)>> {
-    let mut chars = text.chars();
-    let ch = chars.next()?;
-    if chars.next().is_some() {
-        return None;
-    }
-    let rects = match ch {
-        '▀' => vec![(0, 0, 8, 4)],
-        '▁'..='█' => {
-            let height = (ch as u32 - '▁' as u32 + 1) as u8;
-            vec![(0, 8 - height, 8, height)]
-        }
-        '▉'..='▏' => vec![(0, 0, ('▏' as u32 - ch as u32 + 1) as u8, 8)],
-        '▐' => vec![(4, 0, 4, 8)],
-        '▔' => vec![(0, 0, 8, 1)],
-        '▕' => vec![(7, 0, 1, 8)],
-        '▖'..='▟' => {
-            let quadrants = [4, 8, 1, 13, 9, 7, 11, 2, 6, 14][ch as usize - '▖' as usize];
-            (0..4)
-                .filter(|q| quadrants & (1 << q) != 0)
-                .map(|q| ((q % 2) * 4, (q / 2) * 4, 4, 4))
-                .collect()
-        }
-        _ => return None,
-    };
-    Some(rects)
-}
-
-fn block_bounds(
-    origin: Point<Pixels>,
-    cell: Size<Pixels>,
-    rect: (u8, u8, u8, u8),
-    scale: f32,
-) -> Bounds<Pixels> {
-    let snap = |value: Pixels| px((f32::from(value) * scale).round() / scale);
-    let (x, y, width, height) = rect;
-    let left = snap(origin.x + cell.width * (f32::from(x) / 8.));
-    let top = snap(origin.y + cell.height * (f32::from(y) / 8.));
-    let right = snap(origin.x + cell.width * (f32::from(x + width) / 8.));
-    let bottom = snap(origin.y + cell.height * (f32::from(y + height) / 8.));
-    Bounds::new(point(left, top), size(right - left, bottom - top))
-}
-
 #[derive(Default)]
 pub struct Cache {
     key: Option<(Font, Pixels, Size<Pixels>)>,
@@ -228,8 +183,7 @@ impl Cache {
                 let c = &source[i];
                 if c.text.is_empty()
                     || c.text == " "
-                    || block_rectangles(&c.text).is_some()
-                    || crate::box_drawing::supported(&c.text)
+                    || crate::custom_glyph::Glyph::from_text(&c.text).is_some()
                 {
                     i += 1;
                     continue;
@@ -345,27 +299,13 @@ impl Cache {
                 if c.blink && !show_blink {
                     continue;
                 }
-                if let Some(rects) = block_rectangles(&c.text) {
-                    let origin = origin + point(cell.width * c.x as f32, cell.height * y as f32);
-                    let block_cell = size(cell.width * f32::from(c.width), cell.height);
-                    for rect in rects {
-                        window.paint_quad(fill(
-                            block_bounds(origin, block_cell, rect, window.scale_factor()),
-                            c.fg,
-                        ));
-                    }
-                }
-                if crate::box_drawing::supported(&c.text)
-                    && let Some(rects) = crate::box_drawing::rectangles(
-                        &c.text,
+                if let Some(glyph) = crate::custom_glyph::Glyph::from_text(&c.text) {
+                    glyph.paint(
                         origin + point(cell.width * c.x as f32, cell.height * y as f32),
                         size(cell.width * f32::from(c.width), cell.height),
-                        window.scale_factor(),
-                    )
-                {
-                    for bounds in rects {
-                        window.paint_quad(fill(bounds, c.fg));
-                    }
+                        c.fg,
+                        window,
+                    );
                 }
             }
             for text in &row.text {

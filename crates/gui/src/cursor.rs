@@ -88,6 +88,12 @@ pub(super) fn paint(
         let color = tab.default_colors.map_or(gpui::rgb(0), |(_, bg)| {
             gpui::rgb((u32::from(bg.r) << 16) | (u32::from(bg.g) << 8) | u32::from(bg.b))
         });
+        if let Some(glyph) = crate::custom_glyph::Glyph::from_text(&c.text) {
+            window.with_content_mask(Some(ContentMask { bounds }), |window| {
+                glyph.paint(bounds.origin, bounds.size, color, window);
+            });
+            return Ok(());
+        }
         let run = TextRun {
             len: c.text.len(),
             font: crate::terminal_paint::styled_font(font, c),
