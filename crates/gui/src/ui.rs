@@ -418,7 +418,7 @@ impl Gui {
                     )))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         let result = this.menu_action(&action, window, cx);
-                        this.focus.focus(window);
+                        platform::focus_terminal(&this.focus, window);
                         this.report(result, cx);
                     })),
             );
@@ -449,7 +449,7 @@ impl Gui {
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(move |this, _, window, cx| {
                     let result = this.request(Request::Activate { id });
-                    this.focus.focus(window);
+                    platform::focus_terminal(&this.focus, window);
                     this.report(result, cx);
                 })),
         )
@@ -524,7 +524,7 @@ impl Gui {
                 .on_mouse_down(MouseButton::Left, move |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(move |this, _, window, cx| {
                     let result = this.request(Request::Activate { id });
-                    this.focus.focus(window);
+                    platform::focus_terminal(&this.focus, window);
                     this.report(result, cx);
                 })),
             );
@@ -551,7 +551,7 @@ impl Gui {
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(|this, _, window, cx| {
                         let result = this.request(Request::NewTab);
-                        this.focus.focus(window);
+                        platform::focus_terminal(&this.focus, window);
                         this.report(result, cx);
                     })),
             );

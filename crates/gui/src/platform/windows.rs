@@ -5,6 +5,23 @@ use std::{os::windows::process::CommandExt, process::Command};
 pub const OVERLAY_SCROLLBAR: bool = true;
 pub const WINDOWS_PATHS: bool = true;
 
+pub(super) fn focus_native_window(window: &Window) {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::{Foundation::HWND, UI::Input::KeyboardAndMouse::SetFocus};
+
+    if let Ok(handle) = HasWindowHandle::window_handle(window)
+        && let RawWindowHandle::Win32(handle) = handle.as_raw()
+    {
+        // Tab buttons consume native caption clicks to prevent window dragging.
+        // GPUI focus alone does not restore the HWND's keyboard focus when the
+        // default non-client handling has been suppressed.
+        // SetFocus may return null when there was no previous focused window.
+        unsafe {
+            let _ = SetFocus(Some(HWND(handle.hwnd.get() as *mut std::ffi::c_void)));
+        }
+    }
+}
+
 pub fn set_progress(
     progress: Option<&scytty_common::protocol::Progress>,
     window: &Window,

@@ -6,6 +6,12 @@ use gpui::{prelude::*, *};
 mod current;
 pub use current::*;
 
+pub fn focus_terminal(focus: &FocusHandle, window: &mut Window) {
+    #[cfg(target_os = "windows")]
+    current::focus_native_window(window);
+    focus.focus(window);
+}
+
 pub fn command_modifier(modifiers: Modifiers) -> bool {
     if cfg!(target_os = "windows") {
         modifiers.control
