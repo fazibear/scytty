@@ -152,9 +152,19 @@ fn braille_dots(
     cell: Size<Pixels>,
     scale: f32,
 ) -> Vec<Bounds<Pixels>> {
-    let diameter = (f32::from(cell.width / 4.).min(f32::from(cell.height / 8.)) * scale)
-        .round()
-        .max(1.);
+    let left = (f32::from(origin.x) * scale).round();
+    let top = (f32::from(origin.y) * scale).round();
+    let right = (f32::from(origin.x + cell.width) * scale).round();
+    let bottom = (f32::from(origin.y + cell.height) * scale).round();
+    let pitch = ((right - left) / 2.).min((bottom - top) / 4.).floor();
+    if pitch < 1. {
+        return Vec::new();
+    }
+    let diameter = (pitch / 2.).floor().max(1.);
+    // Snap the complete 2×4 grid once. Rounding each fractional dot center
+    // independently alternates the gaps (e.g. 4px, 5px, 4px at Windows DPI).
+    let grid_left = ((left + right - pitch - diameter) / 2.).round();
+    let grid_top = ((top + bottom - pitch * 3. - diameter) / 2.).round();
     // Unicode dots 1–3 are the upper left column, 4–6 the upper
     // right column, then dots 7 and 8 occupy the bottom row.
     [
@@ -171,15 +181,10 @@ fn braille_dots(
     .enumerate()
     .filter(|(bit, _)| mask & (1 << bit) != 0)
     .map(|(_, (x, y))| {
-        let center = origin
-            + point(
-                cell.width * ((x + 1) as f32 / 3.),
-                cell.height * ((y * 2 + 1) as f32 / 8.),
-            );
         Bounds::new(
             point(
-                px((f32::from(center.x) * scale - diameter / 2.).round() / scale),
-                px((f32::from(center.y) * scale - diameter / 2.).round() / scale),
+                px((grid_left + x as f32 * pitch) / scale),
+                px((grid_top + y as f32 * pitch) / scale),
             ),
             size(px(diameter / scale), px(diameter / scale)),
         )

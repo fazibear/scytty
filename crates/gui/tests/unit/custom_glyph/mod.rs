@@ -1,6 +1,29 @@
 use super::*;
 
 #[test]
+fn terminal_braille_keeps_custom_geometry_under_italic_and_bold_styles() -> anyhow::Result<()> {
+    use crate::tab::Tab;
+    use ghostty_vt::{Terminal, TerminalOptions};
+
+    for mask in 0..=255u8 {
+        let text = char::from_u32(0x2800 + u32::from(mask))
+            .unwrap()
+            .to_string();
+        for style in ["0", "3", "1;3"] {
+            let mut tab = Tab::new(Terminal::new(TerminalOptions::default())?)?;
+            tab.terminal
+                .vt_write(format!("\x1b[{style}m{text}\x1b[0m").as_bytes());
+            tab.snapshot()?;
+            let cell = &tab.bidi.cells[0];
+            assert_eq!(cell.text, text);
+            assert_eq!(cell.italic, style != "0");
+            assert_eq!(Glyph::decode(&cell.text, true), Some(Glyph::Braille(mask)));
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn shades_and_legacy_mosaics_use_windows_graphics_with_font_fallback_elsewhere() {
     for (text, expected) in [
         ("░", Glyph::Shade(1)),
@@ -131,10 +154,16 @@ fn braille_indicators_have_upright_pixel_aligned_dot_columns() {
     let cell = size(px(9.3), px(18.7));
     for scale in [1., 1.25, 1.5, 1.75, 2.] {
         let dots = braille_dots(255, origin, cell, scale);
+        let physical = |value: Pixels| (f32::from(value) * scale).round() as i32;
+        let pitch = physical(dots[3].left()) - physical(dots[0].left());
         for column in [[0, 1, 2, 6], [3, 4, 5, 7]] {
             for pair in column.windows(2) {
                 assert_eq!(dots[pair[0]].origin.x, dots[pair[1]].origin.x);
                 assert!(dots[pair[0]].bottom() < dots[pair[1]].top());
+                assert_eq!(
+                    physical(dots[pair[1]].top()) - physical(dots[pair[0]].top()),
+                    pitch
+                );
             }
         }
         for (a, b) in [(0, 3), (1, 4), (2, 5), (6, 7)] {
